@@ -32,6 +32,11 @@ async def health() -> dict[str, str]:
 
 @app.post("/api/auth/login", response_model=AuthStatus)
 async def login(request: LoginRequest, response: Response) -> AuthStatus:
+    try:
+        await cc98_client.validate_token(request.access_token)
+    except CC98Error as exc:
+        status = 401 if exc.kind == "auth" else 502
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
     # The token is held only in the in-memory session store and is never logged or returned.
     session_id = sessions.create(request.access_token)
     response.set_cookie("zju_session", session_id, httponly=True, samesite="lax", secure=False, max_age=86400)

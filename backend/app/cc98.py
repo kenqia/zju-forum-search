@@ -18,6 +18,7 @@ class CC98Error(Exception):
 
 
 class CC98Client(Protocol):
+    async def validate_token(self, token: str) -> None: ...
     async def search_topics(self, token: str, query: str) -> list[TopicSummary]: ...
     async def get_replies(self, token: str, topic_id: str, *, page: int = 1, page_size: int = 100) -> tuple[list[Reply], bool]: ...
 
@@ -44,6 +45,9 @@ class HttpCC98Client:
             return response.json()
         except ValueError as exc:
             raise CC98Error("CC98 返回了无法解析的数据", kind="service") from exc
+
+    async def validate_token(self, token: str) -> None:
+        await self._request(token, "GET", "/user/profile")
 
     async def search_topics(self, token: str, query: str) -> list[TopicSummary]:
         data = await self._request(token, "GET", settings.cc98_topic_search_path, params={"keyword": query})
@@ -73,13 +77,13 @@ def _reply_from_json(item: dict[str, Any]) -> Reply:
     return Reply(id=str(item.get("id", item.get("postId", ""))), author=item.get("authorName", item.get("author")), content=str(item.get("content", item.get("text", ""))), floor=item.get("floor", item.get("index")), published_at=item.get("postTime", item.get("publishedAt")))
 
 
-async def fetch_all_replies(client: CC98Client, token: str, topic_id: str) -> list[Reply]:
+async def fetch_all_replies(client: CC98Client, token: str, topic_id: str, *, max_pages: int = 20) -> list[Reply]:
     all_replies: list[Reply] = []
     page = 1
     while True:
         replies, has_more = await client.get_replies(token, topic_id, page=page)
         all_replies.extend(replies)
-        if not has_more or not replies:
+        if not has_more or not replies or page >= max_pages:
             return all_replies
         page += 1
         await asyncio.sleep(0)

@@ -25,7 +25,9 @@ def plan_query(query: str) -> QueryPlan:
         if cleaned and cleaned not in terms:
             terms.append(cleaned)
     # Keep an exact phrase first, then meaningful terms; this works for both Chinese and Latin input.
-    planned = [original] + terms if original else []
+    synonyms = {"期末": "考试", "考试": "期末", "资料": "复习", "复习": "资料", "高等数学": "高数"}
+    expanded = terms + [synonyms[token] for token in terms if token in synonyms]
+    planned = [original] + list(dict.fromkeys(expanded)) if original else []
     return QueryPlan(original_query=original, terms=planned[:8])
 
 
@@ -84,7 +86,7 @@ class SearchService:
         results: list[SearchResult] = []
         for topic in results_by_id.values():
             try:
-                replies = await fetch_all_replies(self.client, token, topic.id)
+                replies = await fetch_all_replies(self.client, token, topic.id, max_pages=self.config.max_reply_pages)
             except CC98Error as exc:
                 if exc.kind in {"auth", "rate_limit"}:
                     partial, stop_reason = True, str(exc)
@@ -120,6 +122,6 @@ def _score_result(query: str, topic: TopicSummary, replies: Iterable[Reply]) -> 
     reason = "未找到明显关键词匹配"
     if hits:
         matched = next((reply.content.strip() for reply in clean_replies if any(token in reply.content.lower() for token in hits)), None)
-        evidence = (matched or topic.title).replace("\\n", " ")[:240]
+        evidence = (matched or topic.title).replace("\n", " ")[:240]
         reason = f"命中 {len(set(hits))} 个查询词" + ("，标题命中" if title_hits else "")
     return SearchResult(topic=topic, replies=clean_replies, score=float(score), evidence=evidence, reason=reason)
