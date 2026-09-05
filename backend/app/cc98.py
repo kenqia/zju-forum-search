@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import unquote
 
 import httpx
 
@@ -29,7 +30,7 @@ class HttpCC98Client:
     timeout: float = settings.cc98_timeout_seconds
 
     async def _request(self, token: str, method: str, path: str, **kwargs: Any) -> Any:
-        authorization = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+        authorization = _authorization_header(token)
         headers = {"Authorization": authorization, "Accept": "application/json"}
         try:
             async with httpx.AsyncClient(
@@ -79,6 +80,16 @@ def _topic_from_json(item: dict[str, Any]) -> TopicSummary:
     topic_id = str(item.get("id", item.get("topicId", item.get("topic_id", ""))))
     url = item.get("url") or item.get("link") or f"https://www.cc98.org/topic/{topic_id}"
     return TopicSummary(id=topic_id, title=str(item.get("title", item.get("subject", ""))), board=item.get("boardName", item.get("board")), published_at=item.get("postTime", item.get("publishedAt", item.get("createTime"))), reply_count=item.get("replyCount", item.get("replies")), url=str(url))
+
+
+def _authorization_header(value: str) -> str:
+    """Accept the raw access token or the exact Authorization value copied from DevTools."""
+    cleaned = value.strip().strip('"').strip("'").strip()
+    if cleaned.lower().startswith("bearer "):
+        scheme, token = cleaned.split(None, 1)
+        token = unquote(token.strip().strip('"').strip("'"))
+        return f"{scheme.title()} {token}"
+    return f"Bearer {unquote(cleaned)}"
 
 
 def _reply_from_json(item: dict[str, Any]) -> Reply:

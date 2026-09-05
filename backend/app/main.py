@@ -37,7 +37,9 @@ async def login(request: LoginRequest, response: Response) -> AuthStatus:
     try:
         await cc98_client.validate_token(request.access_token)
     except CC98Error as exc:
-        status = 401 if exc.kind == "auth" else 502
+        status = 401 if exc.kind == "auth" and exc.status_code == 401 else 403 if exc.kind == "auth" else 502
+        if exc.kind == "auth" and exc.status_code == 403:
+            raise HTTPException(status_code=status, detail="CC98 拒绝访问：该 token 没有此 API 权限") from exc
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     # The token is held only in the in-memory session store and is never logged or returned.
     session_id = sessions.create(request.access_token)

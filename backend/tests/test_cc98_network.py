@@ -32,3 +32,9 @@ async def test_cc98_client_does_not_use_system_proxy_by_default(monkeypatch):
 
     assert captured["trust_env"] is False
     assert captured["request"][:2] == ("GET", "/me")
+
+
+def test_authorization_header_accepts_devtools_formats():
+    assert cc98._authorization_header("raw%2Btoken") == "Bearer raw+token"
+    assert cc98._authorization_header('"Bearer raw%2Btoken"') == "Bearer raw+token"
+    assert cc98._authorization_header("Bearer raw-token") == "Bearer raw-token"
