@@ -29,7 +29,8 @@ class HttpCC98Client:
     timeout: float = settings.cc98_timeout_seconds
 
     async def _request(self, token: str, method: str, path: str, **kwargs: Any) -> Any:
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        authorization = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+        headers = {"Authorization": authorization, "Accept": "application/json"}
         try:
             async with httpx.AsyncClient(
                 base_url=self.api_base,
@@ -44,14 +45,17 @@ class HttpCC98Client:
         if response.status_code == 429:
             raise CC98Error("CC98 请求过于频繁", kind="rate_limit", status_code=429)
         if response.status_code >= 400:
-            raise CC98Error("CC98 服务返回错误", kind="service", status_code=response.status_code)
+            raise CC98Error(f"CC98 服务返回错误（HTTP {response.status_code}）", kind="service", status_code=response.status_code)
         try:
             return response.json()
         except ValueError as exc:
             raise CC98Error("CC98 返回了无法解析的数据", kind="service") from exc
 
     async def validate_token(self, token: str) -> None:
-        await self._request(token, "GET", "/user/profile")
+        # The official web client refreshes the signed-in user via /me.
+        # /user/profile is not a CC98 API endpoint and returns 404 even for a
+        # valid session.
+        await self._request(token, "GET", "/me")
 
     async def search_topics(self, token: str, query: str) -> list[TopicSummary]:
         data = await self._request(token, "GET", settings.cc98_topic_search_path, params={"keyword": query})
