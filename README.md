@@ -14,6 +14,8 @@ python -m app
 
 后端默认监听 `http://127.0.0.1:8000`，健康检查为 `GET /api/health`。
 
+CC98 请求默认绕过系统 `HTTP(S)_PROXY`，因为校网/VPN 场景下代理可能无法访问 `api.cc98.org`。如果你的网络必须通过代理访问 CC98，可显式设置 `ZJU_CC98_TRUST_ENV=true`。
+
 ## 启动前端
 
 ```bash

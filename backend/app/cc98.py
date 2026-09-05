@@ -31,7 +31,11 @@ class HttpCC98Client:
     async def _request(self, token: str, method: str, path: str, **kwargs: Any) -> Any:
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         try:
-            async with httpx.AsyncClient(base_url=self.api_base, timeout=self.timeout) as client:
+            async with httpx.AsyncClient(
+                base_url=self.api_base,
+                timeout=self.timeout,
+                trust_env=settings.cc98_trust_env,
+            ) as client:
                 response = await client.request(method, path, headers=headers, **kwargs)
         except httpx.HTTPError as exc:
             raise CC98Error("CC98 网络请求失败", kind="network") from exc
