@@ -75,3 +75,14 @@ async def test_llm_failure_falls_back_to_local_sort():
     response = await service.search("test-token", "高数", SearchOptions(llm_experiment=True))
     assert response.llm_experiment is True
     assert response.llm_fallback
+
+@pytest.mark.asyncio
+async def test_invalid_model_output_falls_back_to_local_sort():
+    class InvalidProvider:
+        async def rerank(self, query, results):
+            return {"unexpected": True}
+
+    client = FakeClient()
+    service = SearchService(client, config=Settings(llm_experiment_enabled=True), model_provider=InvalidProvider())
+    response = await service.search("test-token", "高数", SearchOptions(llm_experiment=True))
+    assert response.llm_fallback

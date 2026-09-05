@@ -98,7 +98,10 @@ class SearchService:
         llm_used = bool(options.llm_experiment and self.config.llm_experiment_enabled)
         if llm_used and self.model_provider:
             try:
-                results = await self.model_provider.rerank(plan.original_query, results)
+                reranked = await self.model_provider.rerank(plan.original_query, results)
+                if not isinstance(reranked, list) or not all(isinstance(item, SearchResult) for item in reranked):
+                    raise ValueError("模型返回的排序结果无效")
+                results = reranked
             except Exception:
                 llm_fallback = "外部 LLM 实验失败，已回退到本地排序"
         elif options.llm_experiment:

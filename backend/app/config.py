@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     multi_request_delay_seconds: float = 0.25
     max_reply_pages: int = 20
     llm_experiment_enabled: bool = False
+    llm_endpoint: str = ""
     frontend_origin: str = "http://localhost:5173"
     model_config = SettingsConfigDict(env_file=".env", env_prefix="ZJU_", extra="ignore")
 

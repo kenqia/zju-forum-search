@@ -8,12 +8,14 @@ from .cc98 import CC98Error, HttpCC98Client
 from .config import settings
 from .models import AuthStatus, LoginRequest, SearchResponse
 from .search import SearchOptions, SearchService
+from .providers import ExternalModelProvider, HttpModelClient
 
 app = FastAPI(title="ZJU Forum Search", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 sessions = SessionStore()
 cc98_client = HttpCC98Client()
-search_service = SearchService(cc98_client)
+model_provider = ExternalModelProvider(HttpModelClient(settings.llm_endpoint)) if settings.llm_endpoint else None
+search_service = SearchService(cc98_client, model_provider=model_provider)
 
 
 def _session(session_id: str | None = Cookie(default=None, alias="zju_session")) -> tuple[str, object]:

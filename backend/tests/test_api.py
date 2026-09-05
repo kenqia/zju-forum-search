@@ -37,3 +37,11 @@ def test_login_rejects_invalid_token():
     response = TestClient(app).post("/api/auth/login", json={"access_token": "bad"})
     main.cc98_client = original
     assert response.status_code == 401
+
+
+def test_expired_session_is_rejected():
+    from app.auth import SessionStore
+    from datetime import datetime, timedelta, timezone
+    store = SessionStore()
+    session_id = store.create("fake", datetime.now(timezone.utc) - timedelta(seconds=1))
+    assert store.get(session_id) is None
