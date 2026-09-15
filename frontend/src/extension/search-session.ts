@@ -1,6 +1,6 @@
 import type { FeedbackInput } from './planner';
-import { folded, normalizeText } from './planner';
-import { rankCandidates } from './ranking';
+import { folded, hasExplicitTimeConstraint, normalizeText } from './planner';
+import { rankAndFilterCandidates } from './ranking';
 import {
   MAX_CC98_REQUESTS,
   PAGE_SIZE,
@@ -36,6 +36,7 @@ export interface SearchSnapshot {
   inactiveSearches: string[];
   learnedTerms: string[];
   results: TopicCandidate[];
+  outOfRangeCount: number;
   stopReason: SearchStopReason | null;
   statusText: string;
 }
@@ -127,7 +128,7 @@ export class SearchSession {
   private snapshot: SearchSnapshot = {
     query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
     activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
-    stopReason: null, statusText: '',
+    outOfRangeCount: 0, stopReason: null, statusText: '',
   };
 
   constructor(dependencies: SearchSessionDependencies) {
@@ -173,6 +174,7 @@ export class SearchSession {
 
   async run(query: string, budgetSeconds: number): Promise<SearchSnapshot> {
     const normalizedQuery = normalizeText(query);
+    const enforceTimeRange = hasExplicitTimeConstraint(normalizedQuery);
     let remainingBudgetMs = Math.max(1, budgetSeconds) * 1000;
     const candidates = new Map<string, TopicCandidate>();
     const executed = new Map<string, { query: string; hitCount: number }>();
@@ -187,6 +189,8 @@ export class SearchSession {
       this.publish({ plan });
       searches = plan.searches;
 
+      const candidateView = () => rankAndFilterCandidates([...candidates.values()], plan, enforceTimeRange);
+
       while (true) {
         if (this.requestedStop) return this.finish(this.requestedStop);
         if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
@@ -196,7 +200,7 @@ export class SearchSession {
         });
         if (!deduped.length) return this.finish('no_new_searches');
 
-        const before = candidates.size;
+        const before = candidateView().results.length;
         const roundHits = new Map(deduped.map((search) => [folded(search.query), 0]));
         const queue = deduped.map((search) => ({ search, from: 0 }));
         this.publish({
@@ -229,7 +233,7 @@ export class SearchSession {
           const items = topicList(payload);
           roundHits.set(folded(current.search.query), (roundHits.get(folded(current.search.query)) ?? 0) + items.length);
           this.merge(items, current.search.query, current.from, round, candidates);
-          this.publish({ results: rankCandidates([...candidates.values()], this.snapshot.plan!) });
+          this.publish(candidateView());
           if (items.length === PAGE_SIZE) queue.push({ search: current.search, from: current.from + PAGE_SIZE });
         }
 
@@ -238,26 +242,29 @@ export class SearchSession {
           executed.set(folded(search.query), { query: search.query, hitCount });
           if (hitCount === 0) inactive.add(search.query);
         }
-        const ranked = rankCandidates([...candidates.values()], this.snapshot.plan!);
-        const newCandidates = [...candidates.values()].filter((candidate) => candidate.firstRound === round);
+        const view = candidateView();
+        const visibleIds = new Set(view.results.map((candidate) => candidate.id));
+        const newCandidates = [...candidates.values()].filter(
+          (candidate) => candidate.firstRound === round && visibleIds.has(candidate.id),
+        );
         this.publish({
-          results: ranked,
+          ...view,
           activeSearches: [],
           executedSearches: [...executed.values()].map((search) => search.query),
           inactiveSearches: [...inactive],
-          statusText: `第 ${round} 轮完成，新增 ${candidates.size - before} 个候选。`,
+          statusText: `第 ${round} 轮完成，新增 ${view.results.length - before} 个候选。`,
         });
 
         if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
 
-        if (round === 1 && candidates.size === 0) {
+        if (round === 1 && view.results.length === 0) {
           this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });
           const blind = await this.planner.planBlindExpansion(normalizedQuery, this.controller.signal);
           searches = blind.searches;
           round += 1;
           continue;
         }
-        if (candidates.size === 0) return this.finish('no_results');
+        if (view.results.length === 0) return this.finish('no_results');
         if (newCandidates.length === 0) return this.finish('no_new_candidates');
 
         this.publish({ phase: 'feedback', statusText: `正在根据第 ${round} 轮新增候选学习检索词…` });

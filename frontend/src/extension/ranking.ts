@@ -95,3 +95,22 @@ export function rankCandidates(candidates: TopicCandidate[], plan: ModelQueryPla
     return rest;
   });
 }
+
+export interface RankedCandidateView {
+  results: TopicCandidate[];
+  outOfRangeCount: number;
+}
+
+export function rankAndFilterCandidates(
+  candidates: TopicCandidate[],
+  plan: ModelQueryPlan,
+  enforceTimeRange: boolean,
+): RankedCandidateView {
+  const outOfRangeCount = enforceTimeRange
+    ? candidates.filter((candidate) => timeStatus(candidate, plan) === 'out_of_range').length
+    : 0;
+  const visible = enforceTimeRange
+    ? candidates.filter((candidate) => timeStatus(candidate, plan) !== 'out_of_range')
+    : candidates;
+  return { results: rankCandidates(visible, plan), outOfRangeCount };
+}

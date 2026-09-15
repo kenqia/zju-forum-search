@@ -52,6 +52,8 @@ describe('extension content UI', () => {
     });
     expect(root.querySelector('input[type="password"]')).not.toBeNull();
     expect((root.querySelector('input[type="password"]') as HTMLInputElement).value).toBe('');
+    expect(root.textContent).toContain('CC98 检索时长（秒）');
+    expect(root.textContent).toContain('模型每次最多等待 20 秒，不占用这段检索时长。');
     expect(document.querySelector('input[type="password"]')).toBeNull();
 
     await act(async () => {

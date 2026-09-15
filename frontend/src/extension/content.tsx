@@ -85,7 +85,7 @@ export function createBackgroundPlanner(runtime: RuntimeMessenger): SearchPlanne
 const EMPTY_SNAPSHOT: SearchSnapshot = {
   query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
   activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
-  stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。',
+  outOfRangeCount: 0, stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。',
 };
 
 function SettingsPanel({ runtime, settings, onSettings }: {
@@ -124,9 +124,10 @@ function SettingsPanel({ runtime, settings, onSettings }: {
       <label>模型名称
         <input value={draft.llmModel} onChange={(event) => setDraft({ ...draft, llmModel: event.target.value })} placeholder="model-name" required />
       </label>
-      <label>搜索时长（秒）
+      <label>CC98 检索时长（秒）
         <input type="number" min="10" max="300" value={draft.searchBudgetSeconds} onChange={(event) => setDraft({ ...draft, searchBudgetSeconds: Number(event.target.value) })} required />
       </label>
+      <p className="hint">模型每次最多等待 20 秒，不占用这段检索时长。</p>
       <div className="settings-actions">
         <p className="hint">保存时只申请该 base URL 所在主机。</p>
         <button className="primary" disabled={saving}>{saving ? '保存中…' : '保存设置'}</button>
@@ -189,6 +190,7 @@ function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; setting
     <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
     {running && <div className="run-actions"><button className="secondary" type="button" onClick={stop}>停止并查看结果</button></div>}
     {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
+    {snapshot.outOfRangeCount > 0 && <p className="filtered-count">另有 {snapshot.outOfRangeCount} 条范围外结果已忽略。</p>}
     <div aria-live="polite">
       {snapshot.results.length === 0
         ? <div className="empty">{snapshot.phase === 'complete' && snapshot.stopReason === 'no_results' ? '没有找到主题帖。' : '结果将在这里逐轮出现。'}</div>

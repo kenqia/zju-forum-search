@@ -255,6 +255,90 @@ describe('SearchSession', () => {
     expect(result.results.map((topic) => topic.id)).toEqual(['kept']);
   });
 
+  it('excludes out-of-range topics and feedback evidence for an explicit time request', async () => {
+    let feedbackCandidates: unknown[] = [];
+    const timedPlan: ModelQueryPlan = {
+      ...initialPlan,
+      searches: [{ query: '微积分', purpose: '' }],
+      timeConstraint: { expression: '近三年', startDate: '2023-09-15', endDate: '2026-09-15' },
+    };
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => timedPlan,
+        planFeedback: async (input) => {
+          feedbackCandidates = input.newCandidates;
+          return { newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' };
+        },
+        planBlindExpansion: vi.fn(),
+      },
+      cc98: {
+        searchTopics: vi.fn(async () => [
+          { id: 'recent', title: '微积分期末资料', time: '2025-01-01' },
+          { id: 'old', title: '微积分期末资料', time: '2012-01-01' },
+        ]),
+      },
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+
+    const result = await session.run('近三年的微积分期末资料', 60);
+
+    expect(result.results.map((topic) => topic.id)).toEqual(['recent']);
+    expect(result.outOfRangeCount).toBe(1);
+    expect(feedbackCandidates).toMatchObject([{ id: 'recent' }]);
+  });
+
+  it('keeps topics from every year when the query has no explicit time request', async () => {
+    const untimedPlan = { ...initialPlan, timeConstraint: { expression: '', startDate: null, endDate: null } };
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => untimedPlan,
+        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
+        planBlindExpansion: vi.fn(),
+      },
+      cc98: {
+        searchTopics: vi.fn(async () => [
+          { id: 'recent', title: '微积分资料', time: '2025-01-01' },
+          { id: 'old', title: '微积分资料', time: '2012-01-01' },
+        ]),
+      },
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+
+    const result = await session.run('微积分资料', 60);
+
+    expect(result.results.map((topic) => topic.id)).toEqual(['recent', 'old']);
+    expect(result.outOfRangeCount).toBe(0);
+  });
+
+  it('treats an all-out-of-range first round as empty and performs one blind expansion', async () => {
+    const timedPlan: ModelQueryPlan = {
+      ...initialPlan,
+      searches: [{ query: '微积分', purpose: '' }],
+      timeConstraint: { expression: '近三年', startDate: '2023-09-15', endDate: '2026-09-15' },
+    };
+    const planner = {
+      planFirstRound: vi.fn(async () => timedPlan),
+      planFeedback: vi.fn(),
+      planBlindExpansion: vi.fn(async () => ({ ...timedPlan, searches: [{ query: '微积分试卷', purpose: '' }] })),
+    };
+    const session = new SearchSession({
+      planner,
+      cc98: { searchTopics: vi.fn(async () => [{ id: 'old', title: '微积分资料', time: '2012-01-01' }]) },
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+
+    const result = await session.run('近三年的微积分期末资料', 60);
+
+    expect(planner.planBlindExpansion).toHaveBeenCalledOnce();
+    expect(planner.planFeedback).not.toHaveBeenCalled();
+    expect(result.stopReason).toBe('no_results');
+    expect(result.results).toEqual([]);
+    expect(result.outOfRangeCount).toBe(1);
+  });
+
   it('exposes a Chinese status for every bounded stop condition', () => {
     const reasons: SearchStopReason[] = [
       'model_stop', 'no_new_candidates', 'no_new_searches', 'no_results', 'budget_exhausted',
