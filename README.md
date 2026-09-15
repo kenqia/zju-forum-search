@@ -1,31 +1,35 @@
 # ZJU Forum Search
 
-本地 CC98 论坛语义搜索实验：FastAPI 后端 + React/Vite/TypeScript 前端。
+这是一个运行在 `www.cc98.org` 上的 Manifest V3 浏览器扩展。用户输入自然语言后，扩展让 OpenAI 兼容模型规划检索词，再顺序调用 CC98 主题搜索接口。候选合并与重排都在浏览器中完成。
 
-## 启动后端
-
-```bash
-cd backend
-python -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-python -m app
-```
-
-后端默认监听 `http://127.0.0.1:8000`，健康检查为 `GET /api/health`。
-
-CC98 请求默认绕过系统 `HTTP(S)_PROXY`，因为校网/VPN 场景下代理可能无法访问 `api.cc98.org`。如果你的网络必须通过代理访问 CC98，可显式设置 `ZJU_CC98_TRUST_ENV=true`。
-
-## 启动前端
+## 构建和加载
 
 ```bash
 cd frontend
-npm install
-npm run dev
+npm ci
+npm test
+npm run build
 ```
 
-打开 Vite 地址，在本地界面粘贴用户自己获取的 CC98 access token。token 仅保存在后端进程内存的会话中，不写入日志、配置或仓库。
+构建产物位于 `frontend/dist/`。在 Edge 打开 `edge://extensions`，启用“开发人员模式”，点击“加载解压缩的扩展”，然后选择该目录。登录 `https://www.cc98.org/` 并刷新页面，右下角会出现 `98` 悬浮球。
 
-多请求和外部 LLM 实验默认关闭，可通过后端环境变量显式打开：`ZJU_MULTI_REQUEST_ENABLED=true`、`ZJU_LLM_EXPERIMENT_ENABLED=true`。真实在线测试不在启动或普通单元测试中自动执行。
+扩展没有单独的 CC98 登录入口。它只读取当前 CC98 页面的短期登录态。遇到未登录或登录过期时，先在 CC98 完成登录，再刷新页面。
 
-外部模型实验还需要显式设置本地受信任的 `ZJU_LLM_ENDPOINT`；未设置 endpoint 时不会发起模型调用。模型接口应返回 `{"ordered_ids": ["topic-id", ...]}`。
+## 模型设置
+
+打开悬浮球，在“模型设置”中填写：
+
+- OpenAI 兼容 base URL，例如 `https://example.com/v1`
+- API key
+- 模型名称
+- 单次搜索时长，范围为 10 到 300 秒
+
+保存时，浏览器只申请 base URL 所在主机的访问权限。API key 保存在 `chrome.storage.local`，该存储并不加密。service worker 用 key 请求 `{base URL}/chat/completions`，但不会把它回传给 content script。key 不会写入 CC98 页面的 light DOM、日志或仓库。
+
+## 搜索边界
+
+每轮 CC98 请求间隔 2 秒，每页 20 条，一次搜索最多发出 30 次 CC98 请求。达到用户设置的时长、请求上限或其他停止条件后，面板保留已有结果并说明原因。关闭面板不会停止搜索；“停止并查看结果”会终止当前搜索；新查询会替换旧查询。
+
+首轮模型调用只发送用户查询。反馈轮还会发送本轮新增候选的标题、作者、发布时间、板块和回复数，并对标题长度和整轮负载设上限。主题正文、回帖、CC98 认证信息和用户身份不会发送给模型。
+
+`backend/` 保留早期 FastAPI 可行性实验，不是当前扩展的运行依赖。

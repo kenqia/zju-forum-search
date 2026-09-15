@@ -1,0 +1,206 @@
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { createRoot } from 'react-dom/client';
+import panelCss from './panel.css?inline';
+
+import { Cc98Client, readCc98AccessToken } from './cc98';
+import type { FeedbackInput } from './planner';
+import { SearchSession, type SearchPlanner, type SearchSnapshot } from './search-session';
+import { DEFAULT_SETTINGS, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan } from './types';
+
+export interface RuntimeMessenger {
+  send(message: unknown): Promise<Record<string, unknown>>;
+}
+
+interface ChromeRuntime {
+  lastError?: { message?: string };
+  sendMessage(message: unknown, callback: (response: Record<string, unknown>) => void): void;
+}
+
+function chromeMessenger(runtime: ChromeRuntime): RuntimeMessenger {
+  return {
+    send: (message) => new Promise((resolve, reject) => {
+      runtime.sendMessage(message, (response) => {
+        if (runtime.lastError) reject(new Error('扩展后台没有响应，请重新加载扩展'));
+        else resolve(response ?? {});
+      });
+    }),
+  };
+}
+
+async function responseField<T>(runtime: RuntimeMessenger, message: unknown, field: string): Promise<T> {
+  const response = await runtime.send(message);
+  if (response.ok !== true) throw new Error(typeof response.error === 'string' ? response.error : '扩展后台请求失败');
+  return response[field] as T;
+}
+
+class BackgroundPlanner implements SearchPlanner {
+  constructor(private readonly runtime: RuntimeMessenger) {}
+  planFirstRound(query: string): Promise<ModelQueryPlan> {
+    return responseField(this.runtime, { type: 'planner:first', query }, 'plan');
+  }
+  planBlindExpansion(query: string): Promise<ModelQueryPlan> {
+    return responseField(this.runtime, { type: 'planner:blind', query }, 'plan');
+  }
+  planFeedback(input: FeedbackInput): Promise<FeedbackPlan> {
+    return responseField(this.runtime, { type: 'planner:feedback', input }, 'feedback');
+  }
+}
+
+const EMPTY_SNAPSHOT: SearchSnapshot = {
+  query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
+  activeSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
+  stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。',
+};
+
+type PublicSettings = ExtensionSettings & { hasApiKey?: boolean };
+
+function SettingsPanel({ runtime, settings, onSettings }: {
+  runtime: RuntimeMessenger;
+  settings: PublicSettings;
+  onSettings(settings: PublicSettings): void;
+}) {
+  const [draft, setDraft] = useState(settings);
+  const [status, setStatus] = useState('API key 只保存在 chrome.storage，不会写入页面、日志或仓库。');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(settings), [settings]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      const saved = await responseField<PublicSettings>(runtime, { type: 'settings:save', settings: draft }, 'settings');
+      onSettings(saved);
+      setStatus('设置已保存，并已授予该模型主机的访问权限。');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '保存设置失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <>
+    <form className="settings-form" onSubmit={save}>
+      <label>OpenAI 兼容 base URL
+        <input type="url" value={draft.llmBaseUrl} onChange={(event) => setDraft({ ...draft, llmBaseUrl: event.target.value })} placeholder="https://example.com/v1" required />
+      </label>
+      <label>API key
+        <input type="password" value={draft.llmApiKey} onChange={(event) => setDraft({ ...draft, llmApiKey: event.target.value })} autoComplete="new-password" placeholder={settings.hasApiKey ? '已保存；留空表示不修改' : '尚未设置'} required={!settings.hasApiKey} />
+      </label>
+      <label>模型名称
+        <input value={draft.llmModel} onChange={(event) => setDraft({ ...draft, llmModel: event.target.value })} placeholder="model-name" required />
+      </label>
+      <label>搜索时长（秒）
+        <input type="number" min="10" max="300" value={draft.searchBudgetSeconds} onChange={(event) => setDraft({ ...draft, searchBudgetSeconds: Number(event.target.value) })} required />
+      </label>
+      <div className="settings-actions">
+        <p className="hint">保存时只申请该 base URL 所在主机。</p>
+        <button className="primary" disabled={saving}>{saving ? '保存中…' : '保存设置'}</button>
+      </div>
+    </form>
+    <p className="status" role="status">{status}</p>
+  </>;
+}
+
+function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
+  const planned = snapshot.plan?.searches.map((search) => search.query) ?? [];
+  return <details>
+    <summary>检索进度 · 第 {snapshot.round || 0} 轮 · {snapshot.requestsMade} 次请求</summary>
+    <div className="term-group">首轮检索词<div className="chips">{planned.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>
+    {snapshot.activeSearches.length > 0 && <div className="term-group">正在执行<div className="chips">{snapshot.activeSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
+    {snapshot.inactiveSearches.length > 0 && <div className="term-group">已停用<div className="chips">{snapshot.inactiveSearches.map((term) => <span className="chip inactive" key={term}>{term}</span>)}</div></div>}
+    {snapshot.learnedTerms.length > 0 && <div className="term-group">学到的扩展词<div className="chips">{snapshot.learnedTerms.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
+  </details>;
+}
+
+function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; settings: ExtensionSettings }) {
+  const [query, setQuery] = useState('');
+  const [snapshot, setSnapshot] = useState<SearchSnapshot>(EMPTY_SNAPSHOT);
+  const session = useRef<SearchSession | null>(null);
+  const runId = useRef(0);
+  const running = snapshot.phase !== 'complete' && snapshot.round > 0;
+
+  async function search(event: FormEvent) {
+    event.preventDefault();
+    const normalized = query.trim();
+    if (!normalized) return;
+    session.current?.stop('replaced');
+    session.current = null;
+    const currentRun = ++runId.current;
+    const token = readCc98AccessToken(localStorage);
+    if (!token) {
+      setSnapshot({ ...EMPTY_SNAPSHOT, query: normalized, phase: 'complete', stopReason: 'not_logged_in', statusText: '请先登录 CC98，然后刷新页面再试。' });
+      return;
+    }
+    const nextSession = new SearchSession({
+      planner: new BackgroundPlanner(runtime),
+      cc98: new Cc98Client(token),
+      onUpdate: (next) => { if (runId.current === currentRun) setSnapshot(next); },
+    });
+    session.current = nextSession;
+    await nextSession.run(normalized, settings.searchBudgetSeconds);
+    if (session.current === nextSession) session.current = null;
+  }
+
+  function stop() {
+    session.current?.stop('user_stopped');
+  }
+
+  return <>
+    <form className="search-form" onSubmit={search}>
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：找 2025 年的高数复习资料" aria-label="自然语言查询" required />
+      <button className="primary">{running ? '开始新搜索' : '开始搜索'}</button>
+    </form>
+    <p className={`status${snapshot.stopReason === 'failed' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
+    {running && <div className="run-actions"><button className="secondary" type="button" onClick={stop}>停止并查看结果</button></div>}
+    {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
+    <div aria-live="polite">
+      {snapshot.results.length === 0
+        ? <div className="empty">{snapshot.phase === 'complete' && snapshot.stopReason === 'no_results' ? '没有找到主题帖。' : '结果将在这里逐轮出现。'}</div>
+        : snapshot.results.map((topic, index) => <article className="result" key={topic.id}>
+          <span className="rank">{index + 1}</span>
+          <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复</p></div>
+        </article>)}
+    </div>
+  </>;
+}
+
+function App({ runtime }: { runtime: RuntimeMessenger }) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<'search' | 'settings'>('search');
+  const [settings, setSettings] = useState<PublicSettings>(DEFAULT_SETTINGS);
+  useEffect(() => {
+    void responseField<PublicSettings>(runtime, { type: 'settings:get' }, 'settings').then(setSettings).catch(() => undefined);
+  }, [runtime]);
+
+  return <>
+    <style>{panelCss}</style>
+    <button className="orb" type="button" aria-label="打开 CC98 自然语言搜索" onClick={() => setOpen(true)}>
+      <span className="orb-mark">98</span><span className="orb-dot" />
+    </button>
+    <aside className={`drawer${open ? ' open' : ''}`} aria-label="CC98 自然语言搜索" aria-hidden={!open}>
+      <div className="drawer-head"><div><p className="kicker">CC98 SEARCH</p><h1>找到真正相关的讨论</h1><p className="subtitle">模型规划检索词，CC98 返回候选，浏览器本地重排。</p></div><button className="close" type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button></div>
+      <nav className="tabs" aria-label="功能切换">
+        <button className={`tab${tab === 'search' ? ' active' : ''}`} data-tab="search" type="button" onClick={() => setTab('search')}>搜索</button>
+        <button className={`tab${tab === 'settings' ? ' active' : ''}`} data-tab="settings" type="button" onClick={() => setTab('settings')}>模型设置</button>
+      </nav>
+      {tab === 'search' ? <SearchPanel runtime={runtime} settings={settings} /> : <SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} />}
+      <p className="privacy">反馈轮只会向模型发送标题、作者、时间、板块和回复数。正文、回帖和 CC98 登录信息不会离开浏览器。</p>
+    </aside>
+  </>;
+}
+
+export function mountExtension(targetDocument: Document, runtime: RuntimeMessenger, mode: ShadowRootMode = 'closed') {
+  const existing = targetDocument.getElementById('zju-forum-search-extension');
+  if (existing) throw new Error('CC98 自然语言搜索扩展已经加载');
+  const host = targetDocument.createElement('div');
+  host.id = 'zju-forum-search-extension';
+  const shadowRoot = host.attachShadow({ mode });
+  targetDocument.documentElement.append(host);
+  createRoot(shadowRoot).render(<App runtime={runtime} />);
+  return { host, shadowRoot };
+}
+
+const chromeApi = (globalThis as typeof globalThis & { chrome?: { runtime?: ChromeRuntime } }).chrome;
+if (chromeApi?.runtime && document.documentElement && !document.getElementById('zju-forum-search-extension')) {
+  mountExtension(document, chromeMessenger(chromeApi.runtime));
+}

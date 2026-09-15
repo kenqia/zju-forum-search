@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "CC98 自然语言搜索",
+  "version": "0.1.0",
+  "description": "在 CC98 页面内用自然语言迭代检索主题帖。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://api.cc98.org/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.cc98.org/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ]
+}
