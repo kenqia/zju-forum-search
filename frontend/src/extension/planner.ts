@@ -24,6 +24,43 @@ export function folded(value: unknown): string {
   return normalizeText(value).toLocaleLowerCase('zh-CN');
 }
 
+export function hasExplicitTimeConstraint(query: string): boolean {
+  const value = normalizeText(query);
+  return /(?:19|20)\d{2}\s*年?|(?:近|最近|过去|前)\s*[零〇一二两三四五六七八九十百\d]+\s*(?:年|个月|月|周|天)|(?:今年|去年|前年|本年|上半年|下半年|这学期|本学期|上学期|去年同期)/u.test(value);
+}
+
+function currentLocalDate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function validIsoDate(value: string | null): boolean {
+  if (value === null) return true;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+}
+
+function validateTimeRange(plan: ModelQueryPlan, query: string): void {
+  const { expression, startDate, endDate } = plan.timeConstraint;
+  const explicit = hasExplicitTimeConstraint(query) || Boolean(expression);
+  if (!validIsoDate(startDate)
+    || !validIsoDate(endDate)
+    || (startDate !== null && endDate !== null && startDate > endDate)
+    || (explicit && startDate === null && endDate === null)) {
+    throw new PlannerError('模型返回的时间范围无效');
+  }
+}
+
 function uniqueBy<T>(values: T[], keyOf: (v: T) => string): T[] {
   const seen = new Set<string>();
   return values.filter((v) => {
@@ -143,7 +180,7 @@ function assertFeedbackShape(value: unknown): asserts value is Record<string, un
 
 export const FIRST_ROUND_SYSTEM_PROMPT = `你是校园论坛关键词检索规划器。根据用户的自然语言查询生成 JSON 查询计划。
 
-论坛搜索接口按关键词匹配主题帖标题。检索词应覆盖高信号原词、稳定简称、同义表达和有价值的精确组合。不要机械拆分中文短语。不要假设你看过论坛内容。
+论坛搜索接口按关键词匹配主题帖标题。检索词应覆盖高信号原词、稳定简称、同义表达和有价值的精确组合。不要机械拆分中文短语。不要假设你看过论坛内容。用户消息中的 current_date 是扩展所在设备的当前日期，所有相对时间约束都必须据此换算为明确日期。
 
 返回以下 JSON 对象，不要返回额外字段或解释文字：
 {
@@ -173,10 +210,11 @@ export const FEEDBACK_SYSTEM_PROMPT = `你是校园论坛迭代检索的反馈�
 
 export type FeedbackInput = FeedbackRequestInput;
 
-export function buildFeedbackMessages(input: FeedbackInput): { role: string; content: string }[] {
+export function buildFeedbackMessages(input: FeedbackInput, currentDate?: string): { role: string; content: string }[] {
   const encoder = new TextEncoder();
   const payload = {
     query: input.query.slice(0, 500),
+    ...(currentDate ? { current_date: currentDate } : {}),
     round: input.round,
     executed_searches: [] as { query: string; hitCount: number }[],
     new_candidates: [] as { title: string; author: string; board: string; time: string; reply_count: number }[],
@@ -212,22 +250,27 @@ export function buildFeedbackMessages(input: FeedbackInput): { role: string; con
 }
 
 export class PlannerClient {
-  constructor(private transport: PlannerTransport, private settings: ExtensionSettings) {}
+  constructor(
+    private transport: PlannerTransport,
+    private settings: ExtensionSettings,
+    private readonly today: () => string = currentLocalDate,
+  ) {}
 
   async planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
     const content = await this.transport.chatCompletions(this.settings, [
       { role: 'system', content: FIRST_ROUND_SYSTEM_PROMPT },
-      { role: 'user', content: JSON.stringify({ query: query.trim() }) },
+      { role: 'user', content: JSON.stringify({ query: query.trim(), current_date: this.today() }) },
     ], signal);
     const raw = parseJson(content);
     assertFirstPlanShape(raw);
     const plan = normalizeModelPlan(raw);
     if (!plan.searches.length) throw new PlannerError('规划器没有生成有效检索词');
+    validateTimeRange(plan, query);
     return plan;
   }
 
   async planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
-    const content = await this.transport.chatCompletions(this.settings, buildFeedbackMessages(input), signal);
+    const content = await this.transport.chatCompletions(this.settings, buildFeedbackMessages(input, this.today()), signal);
     const raw = parseJson(content);
     assertFeedbackShape(raw);
     return normalizeFeedbackPlan(raw);
@@ -240,6 +283,7 @@ export class PlannerClient {
         role: 'user',
         content: JSON.stringify({
           query: query.trim(),
+          current_date: this.today(),
           note: '第一轮检索词全部没有命中。请放宽约束，换用更宽的同义表达、上位词和常见说法重新生成检索词。',
         }),
       },
@@ -248,6 +292,7 @@ export class PlannerClient {
     assertFirstPlanShape(raw);
     const plan = normalizeModelPlan(raw);
     if (!plan.searches.length) throw new PlannerError('盲扩展没有生成有效检索词');
+    validateTimeRange(plan, query);
     return plan;
   }
 }

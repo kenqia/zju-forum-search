@@ -4,6 +4,37 @@ import { buildFeedbackMessages, FEEDBACK_METADATA_TOKEN_LIMIT, normalizeModelPla
 import { DEFAULT_SETTINGS, type TopicCandidate } from './types';
 
 describe('PlannerClient', () => {
+  it('sends the current local date in first, blind, and feedback planning calls', async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const responses = [
+      JSON.stringify({
+        summary: '近三年微积分资料', searches: [{ query: '微积分', purpose: '' }], required_concepts: [], excluded_terms: [],
+        time_constraint: { expression: '近三年', start_date: '2023-09-15', end_date: '2026-09-15' },
+      }),
+      JSON.stringify({
+        summary: '近三年微积分资料', searches: [{ query: '高数', purpose: '' }], required_concepts: [], excluded_terms: [],
+        time_constraint: { expression: '近三年', start_date: '2023-09-15', end_date: '2026-09-15' },
+      }),
+      JSON.stringify({ new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '足够' }),
+    ];
+    const client = new PlannerClient({
+      chatCompletions: async (_settings, messages) => {
+        payloads.push(JSON.parse(messages[1].content));
+        return responses.shift()!;
+      },
+    }, DEFAULT_SETTINGS, () => '2026-09-15');
+
+    await client.planFirstRound('近三年的微积分资料');
+    await client.planBlindExpansion('近三年的微积分资料');
+    await client.planFeedback({ query: '近三年的微积分资料', executedSearches: [], newCandidates: [], round: 1 });
+
+    expect(payloads).toEqual([
+      { query: '近三年的微积分资料', current_date: '2026-09-15' },
+      { query: '近三年的微积分资料', current_date: '2026-09-15', note: expect.any(String) },
+      expect.objectContaining({ query: '近三年的微积分资料', current_date: '2026-09-15' }),
+    ]);
+  });
+
   it('rejects a first-round response without usable searches', async () => {
     const client = new PlannerClient({ chatCompletions: async () => '{"summary":"空","searches":[]}' }, DEFAULT_SETTINGS);
 
@@ -23,6 +54,18 @@ describe('PlannerClient', () => {
     }) }, DEFAULT_SETTINGS);
 
     await expect(client.planFirstRound('高数资料')).rejects.toThrow('模型返回的查询计划结构无效');
+  });
+
+  it('rejects missing, invalid, or reversed dates for an explicit time request', async () => {
+    const response = (startDate: string | null, endDate: string | null) => JSON.stringify({
+      summary: '近三年微积分资料', searches: [{ query: '微积分', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '近三年', start_date: startDate, end_date: endDate },
+    });
+
+    for (const [startDate, endDate] of [[null, null], ['2026-02-30', '2026-09-15'], ['2026-09-15', '2023-09-15']] as const) {
+      const client = new PlannerClient({ chatCompletions: async () => response(startDate, endDate) }, DEFAULT_SETTINGS);
+      await expect(client.planFirstRound('近三年的微积分资料')).rejects.toThrow('模型返回的时间范围无效');
+    }
   });
 
   it('normalizes the fixed first-round constraints', () => {
