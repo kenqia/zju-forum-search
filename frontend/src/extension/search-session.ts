@@ -22,6 +22,7 @@ export type SearchStopReason =
   | 'replaced'
   | 'not_logged_in'
   | 'cc98_limited'
+  | 'model_timeout'
   | 'failed';
 
 export interface SearchSnapshot {
@@ -109,6 +110,7 @@ export function stopReasonText(reason: SearchStopReason): string {
     replaced: '已发起新查询，旧搜索已终止。',
     not_logged_in: '请先登录 CC98，然后刷新页面再试。',
     cc98_limited: 'CC98 暂时限制了搜索请求，保留当前部分结果。',
+    model_timeout: '模型调用超过 20 秒，保留当前部分结果。',
     failed: '搜索失败，保留当前部分结果。',
   };
   return messages[reason];
@@ -171,8 +173,7 @@ export class SearchSession {
 
   async run(query: string, budgetSeconds: number): Promise<SearchSnapshot> {
     const normalizedQuery = normalizeText(query);
-    const started = this.now();
-    const deadline = started + Math.max(1, budgetSeconds) * 1000;
+    let remainingBudgetMs = Math.max(1, budgetSeconds) * 1000;
     const candidates = new Map<string, TopicCandidate>();
     const executed = new Map<string, { query: string; hitCount: number }>();
     const inactive = new Set<string>();
@@ -188,7 +189,7 @@ export class SearchSession {
 
       while (true) {
         if (this.requestedStop) return this.finish(this.requestedStop);
-        if (this.now() >= deadline) return this.finish('budget_exhausted');
+        if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
         const deduped = searches.filter((search, index, all) => {
           const key = folded(search.query);
           return key && !executed.has(key) && all.findIndex((item) => folded(item.query) === key) === index;
@@ -207,15 +208,24 @@ export class SearchSession {
         while (queue.length) {
           if (this.requestedStop) return this.finish(this.requestedStop);
           if (this.snapshot.requestsMade >= MAX_CC98_REQUESTS) return this.finish('request_limit');
-          if (this.now() >= deadline) return this.finish('budget_exhausted');
+          if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
           const current = queue.shift()!;
           if (this.snapshot.requestsMade > 0) {
-            await this.sleep(Math.min(REQUEST_INTERVAL_MS, Math.max(0, deadline - this.now())));
+            const waitMs = Math.min(REQUEST_INTERVAL_MS, remainingBudgetMs);
+            const waitStarted = this.now();
+            await this.sleep(waitMs);
+            remainingBudgetMs -= Math.max(waitMs, Math.max(0, this.now() - waitStarted));
             if (this.requestedStop) return this.finish(this.requestedStop);
-            if (this.now() >= deadline) return this.finish('budget_exhausted');
+            if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
           }
           this.publish({ requestsMade: this.snapshot.requestsMade + 1 });
-          const payload = await this.cc98.searchTopics(current.search.query, current.from, PAGE_SIZE, this.controller.signal);
+          const requestStarted = this.now();
+          let payload: unknown;
+          try {
+            payload = await this.cc98.searchTopics(current.search.query, current.from, PAGE_SIZE, this.controller.signal);
+          } finally {
+            remainingBudgetMs -= Math.max(0, this.now() - requestStarted);
+          }
           const items = topicList(payload);
           roundHits.set(folded(current.search.query), (roundHits.get(folded(current.search.query)) ?? 0) + items.length);
           this.merge(items, current.search.query, current.from, round, candidates);
@@ -237,6 +247,8 @@ export class SearchSession {
           inactiveSearches: [...inactive],
           statusText: `第 ${round} 轮完成，新增 ${candidates.size - before} 个候选。`,
         });
+
+        if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
 
         if (round === 1 && candidates.size === 0) {
           this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });

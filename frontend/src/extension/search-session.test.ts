@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { SearchSession, stopReasonText, type SearchStopReason } from './search-session';
+import { SearchSession, SearchSessionError, stopReasonText, type SearchStopReason } from './search-session';
 import type { ModelQueryPlan } from './types';
 
 const initialPlan: ModelQueryPlan = {
@@ -209,10 +209,56 @@ describe('SearchSession', () => {
     expect(result.stopReason).toBe('budget_exhausted');
   });
 
+  it('does not charge model planning time against the CC98 search budget', async () => {
+    let clock = 0;
+    const searchTopics = vi.fn(async () => []);
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => {
+          clock += 60_000;
+          return { ...initialPlan, searches: [{ query: '高数', purpose: '' }] };
+        },
+        planFeedback: vi.fn(),
+        planBlindExpansion: vi.fn(async () => {
+          clock += 60_000;
+          return { ...initialPlan, searches: [{ query: '微积分', purpose: '' }] };
+        }),
+      },
+      cc98: { searchTopics },
+      sleep: async () => undefined,
+      now: () => clock,
+    });
+
+    await session.run('近三年的高数资料', 10);
+
+    expect(searchTopics).toHaveBeenCalled();
+  });
+
+  it('keeps partial results and identifies a feedback model timeout', async () => {
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
+        planFeedback: async () => {
+          throw new SearchSessionError('反馈模型调用超过 20 秒，已保留当前结果。', 'model_timeout');
+        },
+        planBlindExpansion: vi.fn(),
+      },
+      cc98: { searchTopics: vi.fn(async () => [{ id: 'kept', title: '高数资料' }]) },
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+
+    const result = await session.run('高数资料', 60);
+
+    expect(result.stopReason).toBe('model_timeout');
+    expect(result.statusText).toBe('反馈模型调用超过 20 秒，已保留当前结果。');
+    expect(result.results.map((topic) => topic.id)).toEqual(['kept']);
+  });
+
   it('exposes a Chinese status for every bounded stop condition', () => {
     const reasons: SearchStopReason[] = [
       'model_stop', 'no_new_candidates', 'no_new_searches', 'no_results', 'budget_exhausted',
-      'request_limit', 'user_stopped', 'replaced', 'not_logged_in', 'cc98_limited', 'failed',
+      'request_limit', 'user_stopped', 'replaced', 'not_logged_in', 'cc98_limited', 'model_timeout', 'failed',
     ];
 
     for (const reason of reasons) expect(stopReasonText(reason)).toMatch(/[\u3400-\u9fff]/u);

@@ -4,8 +4,8 @@ import panelCss from './panel.css?inline';
 
 import { Cc98Client, readCc98AccessToken } from './cc98';
 import type { FeedbackInput } from './planner';
-import { SearchSession, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
+import { SearchSession, SearchSessionError, type SearchPlanner, type SearchSnapshot } from './search-session';
+import { DEFAULT_SETTINGS, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
 
 export interface RuntimeMessenger {
   send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
@@ -27,7 +27,10 @@ function chromeMessenger(runtime: ChromeRuntime): RuntimeMessenger {
   };
 }
 
-function responseError(response: { ok: false; error: string }): Error {
+function responseError(response: { ok: false; error: string; code?: ExtensionFailureCode }, timeoutMessage?: string): Error {
+  if (response.code === 'model_timeout') {
+    return new SearchSessionError(timeoutMessage ?? '模型调用超过 20 秒，已停止搜索。', 'model_timeout');
+  }
   return new Error(response.error || '扩展后台请求失败');
 }
 
@@ -54,14 +57,14 @@ class BackgroundPlanner implements SearchPlanner {
       ? { type, requestId, query } as const
       : { type, requestId, query } as const;
     const response = await this.withCancellation(this.runtime.send(request), requestId, signal);
-    if (!response.ok) throw responseError(response);
+    if (!response.ok) throw responseError(response, '模型调用超过 20 秒，未开始 CC98 检索。');
     return response.plan;
   }
   private async requestFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
     const response = await this.withCancellation(this.runtime.send({ type: 'planner:feedback', requestId, input }), requestId, signal);
-    if (!response.ok) throw responseError(response);
+    if (!response.ok) throw responseError(response, '反馈模型调用超过 20 秒，已保留当前结果。');
     return response.feedback;
   }
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
@@ -73,6 +76,10 @@ class BackgroundPlanner implements SearchPlanner {
   planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
     return this.requestFeedback(input, signal);
   }
+}
+
+export function createBackgroundPlanner(runtime: RuntimeMessenger): SearchPlanner {
+  return new BackgroundPlanner(runtime);
 }
 
 const EMPTY_SNAPSHOT: SearchSnapshot = {
@@ -161,7 +168,7 @@ function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; setting
       return;
     }
     const nextSession = new SearchSession({
-      planner: new BackgroundPlanner(runtime),
+      planner: createBackgroundPlanner(runtime),
       cc98: new Cc98Client(token),
       onUpdate: (next) => { if (runId.current === currentRun) setSnapshot(next); },
     });
@@ -179,7 +186,7 @@ function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; setting
       <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：找 2025 年的高数复习资料" aria-label="自然语言查询" required />
       <button className="primary">{running ? '开始新搜索' : '开始搜索'}</button>
     </form>
-    <p className={`status${snapshot.stopReason === 'failed' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
+    <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
     {running && <div className="run-actions"><button className="secondary" type="button" onClick={stop}>停止并查看结果</button></div>}
     {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
     <div aria-live="polite">
