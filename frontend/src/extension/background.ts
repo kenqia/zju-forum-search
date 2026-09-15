@@ -1,6 +1,12 @@
 import { PlannerClient, PlannerError, type FeedbackInput, type PlannerTransport } from './planner';
 import { chatCompletionsUrl, modelHostPermission, normalizeSettings, validateSettings } from './settings';
-import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionSettings } from './types';
+import {
+  DEFAULT_SETTINGS,
+  MODEL_MAX_COMPLETION_TOKENS,
+  MODEL_TIMEOUT_MS,
+  type ExtensionRequest,
+  type ExtensionSettings,
+} from './types';
 
 export interface SettingsStorage {
   get(): Promise<Partial<ExtensionSettings>>;
@@ -55,38 +61,66 @@ function errorMessage(error: unknown): string {
   return '模型规划失败，请检查设置后重试';
 }
 
+function errorResponse(error: unknown) {
+  return {
+    ok: false as const,
+    error: errorMessage(error),
+    ...(error instanceof PlannerError ? { code: error.code } : {}),
+  };
+}
+
 function createTransport(dependencies: BackgroundDependencies): PlannerTransport {
   return {
     async chatCompletions(settings, messages, signal) {
-      let response: Response;
+      const requestController = new AbortController();
+      let timedOut = false;
+      const forwardAbort = () => requestController.abort(signal?.reason);
+      signal?.addEventListener('abort', forwardAbort, { once: true });
+      if (signal?.aborted) forwardAbort();
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        requestController.abort();
+      }, MODEL_TIMEOUT_MS);
       try {
-        response = await dependencies.fetch(chatCompletionsUrl(settings.llmBaseUrl), {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${settings.llmApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: settings.llmModel,
-            messages,
-            response_format: { type: 'json_object' },
-          }),
-          signal,
-        });
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') throw new PlannerError('模型请求已取消');
-        throw new PlannerError('无法连接模型服务，请检查端点和网络');
+        let response: Response;
+        try {
+          response = await dependencies.fetch(chatCompletionsUrl(settings.llmBaseUrl), {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${settings.llmApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: settings.llmModel,
+              messages,
+              response_format: { type: 'json_object' },
+              enable_thinking: false,
+              max_completion_tokens: MODEL_MAX_COMPLETION_TOKENS,
+            }),
+            signal: requestController.signal,
+          });
+        } catch (error) {
+          if (timedOut) throw new PlannerError('模型调用超过 20 秒', 'model_timeout');
+          if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+            throw new PlannerError('模型请求已取消', 'model_cancelled');
+          }
+          throw new PlannerError('无法连接模型服务，请检查端点和网络');
+        }
+        if (!response.ok) throw new PlannerError(`模型服务返回 HTTP ${response.status}`);
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch {
+          if (timedOut) throw new PlannerError('模型调用超过 20 秒', 'model_timeout');
+          throw new PlannerError('模型服务没有返回有效 JSON');
+        }
+        const content = (body as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message?.content;
+        if (typeof content !== 'string') throw new PlannerError('模型没有返回文本内容');
+        return content;
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', forwardAbort);
       }
-      if (!response.ok) throw new PlannerError(`模型服务返回 HTTP ${response.status}`);
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch {
-        throw new PlannerError('模型服务没有返回有效 JSON');
-      }
-      const content = (body as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message?.content;
-      if (typeof content !== 'string') throw new PlannerError('模型没有返回文本内容');
-      return content;
     },
   };
 }
@@ -139,7 +173,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         plannerControllers.delete(request.requestId);
       } catch (error) {
         if ('requestId' in request) plannerControllers.delete(request.requestId);
-        sendResponse({ ok: false, error: errorMessage(error) });
+        sendResponse(errorResponse(error));
       }
     })();
     return true;

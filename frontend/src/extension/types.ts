@@ -73,7 +73,8 @@ export type ExtensionRequest =
   | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput }
   | { type: 'planner:cancel'; requestId: string };
 
-type ExtensionFailure = { ok: false; error: string };
+export type ExtensionFailureCode = 'planner_failed' | 'model_timeout' | 'model_cancelled';
+type ExtensionFailure = { ok: false; error: string; code?: ExtensionFailureCode };
 
 export type ExtensionResponseFor<Request extends ExtensionRequest> = ExtensionFailure | (
   Request extends { type: 'settings:get' | 'settings:save' }
@@ -95,3 +96,5 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 export const MAX_CC98_REQUESTS = 30;
 export const REQUEST_INTERVAL_MS = 2000;
 export const PAGE_SIZE = 20;
+export const MODEL_TIMEOUT_MS = 20_000;
+export const MODEL_MAX_COMPLETION_TOKENS = 1200;

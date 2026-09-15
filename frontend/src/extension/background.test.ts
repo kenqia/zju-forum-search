@@ -91,6 +91,54 @@ describe('background message boundary', () => {
       'Content-Type': 'application/json',
     });
     expect((init as RequestInit).body).not.toContain('不得转发');
+    expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
+      enable_thinking: false,
+      max_completion_tokens: 1200,
+    });
+  });
+
+  it('uses the same fast bounded generation settings for feedback', async () => {
+    const { dependencies, send } = harness({
+      fetch: vi.fn(async () => new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '结果足够',
+        }) } }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })),
+    });
+
+    await send({
+      type: 'planner:feedback',
+      requestId: 'feedback-1',
+      input: { query: '高数', executedSearches: [], newCandidates: [], round: 1 },
+    });
+
+    const [, init] = (dependencies.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
+      enable_thinking: false,
+      max_completion_tokens: 1200,
+    });
+  });
+
+  it('reports a model timeout after 20 seconds instead of a connection failure', async () => {
+    vi.useFakeTimers();
+    try {
+      const { send } = harness({
+        fetch: vi.fn(async (_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+        })),
+      });
+
+      const pending = send({ type: 'planner:first', requestId: 'request-timeout', query: '高数' });
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        error: '模型调用超过 20 秒',
+        code: 'model_timeout',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('returns readable Chinese errors for malformed model responses', async () => {
@@ -101,6 +149,7 @@ describe('background message boundary', () => {
     await expect(send({ type: 'planner:first', requestId: 'request-2', query: '高数' })).resolves.toEqual({
       ok: false,
       error: '模型没有返回文本内容',
+      code: 'planner_failed',
     });
   });
 
@@ -120,6 +169,6 @@ describe('background message boundary', () => {
     await send({ type: 'planner:cancel', requestId: 'request-cancel' });
 
     expect(observedSignal?.aborted).toBe(true);
-    await expect(pending).resolves.toEqual({ ok: false, error: '模型请求已取消' });
+    await expect(pending).resolves.toEqual({ ok: false, error: '模型请求已取消', code: 'model_cancelled' });
   });
 });

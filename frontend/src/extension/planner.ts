@@ -4,7 +4,13 @@ export interface PlannerTransport {
   chatCompletions(settings: ExtensionSettings, messages: { role: string; content: string }[], signal?: AbortSignal): Promise<string>;
 }
 
-export class PlannerError extends Error {}
+export type PlannerErrorCode = 'planner_failed' | 'model_timeout' | 'model_cancelled';
+
+export class PlannerError extends Error {
+  constructor(message: string, readonly code: PlannerErrorCode = 'planner_failed') {
+    super(message);
+  }
+}
 
 const TITLE_LIMIT = 80;
 const FEEDBACK_CANDIDATE_LIMIT = 160;
