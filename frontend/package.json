@@ -3,7 +3,8 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc -b",
-    "build": "tsc -b && vite build && vite build --config vite.background.config.ts",
+    "build": "tsc -b && vite build && vite build --config vite.background.config.ts && npm run verify:dist",
+    "verify:dist": "node scripts/verify-extension-build.mjs",
     "test": "vitest run"
   },
   "dependencies": {
