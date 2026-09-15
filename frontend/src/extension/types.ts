@@ -73,6 +73,18 @@ export type ExtensionRequest =
   | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput }
   | { type: 'planner:cancel'; requestId: string };
 
+type ExtensionFailure = { ok: false; error: string };
+
+export type ExtensionResponseFor<Request extends ExtensionRequest> = ExtensionFailure | (
+  Request extends { type: 'settings:get' | 'settings:save' }
+    ? { ok: true; settings: PublicExtensionSettings }
+    : Request extends { type: 'planner:first' | 'planner:blind' }
+      ? { ok: true; plan: ModelQueryPlan }
+      : Request extends { type: 'planner:feedback' }
+        ? { ok: true; feedback: FeedbackPlan }
+        : { ok: true }
+);
+
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   llmBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   llmApiKey: '',

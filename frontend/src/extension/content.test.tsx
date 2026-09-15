@@ -1,17 +1,20 @@
 // @vitest-environment jsdom
 
 import { act } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { mountExtension, type RuntimeMessenger } from './content';
-import { DEFAULT_SETTINGS } from './types';
+import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } from './types';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('extension content UI', () => {
   it('mounts in Shadow DOM and toggles Scheme A without exposing the API key to page DOM', async () => {
     const runtime: RuntimeMessenger = {
-      send: vi.fn(async () => ({ ok: true, settings: { ...DEFAULT_SETTINGS, llmApiKey: '', hasApiKey: true } })),
+      send: async <Request extends ExtensionRequest>(_message: Request) => ({
+        ok: true,
+        settings: { ...DEFAULT_SETTINGS, llmApiKey: '', hasApiKey: true },
+      } as ExtensionResponseFor<Request>),
     };
     let mounted: ReturnType<typeof mountExtension>;
     await act(async () => {

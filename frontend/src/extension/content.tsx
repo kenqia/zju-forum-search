@@ -5,10 +5,10 @@ import panelCss from './panel.css?inline';
 import { Cc98Client, readCc98AccessToken } from './cc98';
 import type { FeedbackInput } from './planner';
 import { SearchSession, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
+import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
 
 export interface RuntimeMessenger {
-  send(message: ExtensionRequest): Promise<Record<string, unknown>>;
+  send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
 }
 
 interface ChromeRuntime {
@@ -18,28 +18,22 @@ interface ChromeRuntime {
 
 function chromeMessenger(runtime: ChromeRuntime): RuntimeMessenger {
   return {
-    send: (message) => new Promise((resolve, reject) => {
+    send: <Request extends ExtensionRequest>(message: Request) => new Promise<ExtensionResponseFor<Request>>((resolve, reject) => {
       runtime.sendMessage(message, (response) => {
         if (runtime.lastError) reject(new Error('扩展后台没有响应，请重新加载扩展'));
-        else resolve(response ?? {});
+        else resolve((response ?? {}) as ExtensionResponseFor<Request>);
       });
     }),
   };
 }
 
-async function responseField<T>(runtime: RuntimeMessenger, message: ExtensionRequest, field: string): Promise<T> {
-  const response = await runtime.send(message);
-  if (response.ok !== true) throw new Error(typeof response.error === 'string' ? response.error : '扩展后台请求失败');
-  return response[field] as T;
+function responseError(response: { ok: false; error: string }): Error {
+  return new Error(response.error || '扩展后台请求失败');
 }
 
 class BackgroundPlanner implements SearchPlanner {
   constructor(private readonly runtime: RuntimeMessenger) {}
-  private request<T>(message: { type: 'planner:first' | 'planner:blind'; query: string } | { type: 'planner:feedback'; input: FeedbackInput }, field: string, signal?: AbortSignal): Promise<T> {
-    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-    const request = { ...message, requestId } as ExtensionRequest;
-    if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const response = responseField<T>(this.runtime, request, field);
+  private withCancellation<T>(response: Promise<T>, requestId: string, signal?: AbortSignal): Promise<T> {
     if (!signal) return response;
     return new Promise<T>((resolve, reject) => {
       const abort = () => {
@@ -53,14 +47,31 @@ class BackgroundPlanner implements SearchPlanner {
       );
     });
   }
+  private async requestPlan(type: 'planner:first' | 'planner:blind', query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
+    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
+    const request = type === 'planner:first'
+      ? { type, requestId, query } as const
+      : { type, requestId, query } as const;
+    const response = await this.withCancellation(this.runtime.send(request), requestId, signal);
+    if (!response.ok) throw responseError(response);
+    return response.plan;
+  }
+  private async requestFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
+    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
+    const response = await this.withCancellation(this.runtime.send({ type: 'planner:feedback', requestId, input }), requestId, signal);
+    if (!response.ok) throw responseError(response);
+    return response.feedback;
+  }
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
-    return this.request({ type: 'planner:first', query }, 'plan', signal);
+    return this.requestPlan('planner:first', query, signal);
   }
   planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
-    return this.request({ type: 'planner:blind', query }, 'plan', signal);
+    return this.requestPlan('planner:blind', query, signal);
   }
   planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
-    return this.request({ type: 'planner:feedback', input }, 'feedback', signal);
+    return this.requestFeedback(input, signal);
   }
 }
 
@@ -84,8 +95,9 @@ function SettingsPanel({ runtime, settings, onSettings }: {
     event.preventDefault();
     setSaving(true);
     try {
-      const saved = await responseField<PublicExtensionSettings>(runtime, { type: 'settings:save', settings: draft }, 'settings');
-      onSettings(saved);
+      const response = await runtime.send({ type: 'settings:save', settings: draft });
+      if (!response.ok) throw responseError(response);
+      onSettings(response.settings);
       setStatus('设置已保存，并已授予该模型主机的访问权限。');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '保存设置失败');
@@ -186,7 +198,9 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
   const [tab, setTab] = useState<'search' | 'settings'>('search');
   const [settings, setSettings] = useState<PublicExtensionSettings>(DEFAULT_SETTINGS);
   useEffect(() => {
-    void responseField<PublicExtensionSettings>(runtime, { type: 'settings:get' }, 'settings').then(setSettings).catch(() => undefined);
+    void runtime.send({ type: 'settings:get' }).then((response) => {
+      if (response.ok) setSettings(response.settings);
+    }).catch(() => undefined);
   }, [runtime]);
 
   return <>
