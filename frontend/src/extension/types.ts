@@ -39,10 +39,7 @@ export interface TopicCandidate {
   missingRequiredCount?: number;
 }
 
-export interface FeedbackSearch {
-  query: string;
-  purpose: string;
-}
+export type FeedbackSearch = PlannedSearch;
 
 export interface FeedbackPlan {
   newSearches: FeedbackSearch[];
@@ -58,6 +55,23 @@ export interface ExtensionSettings {
   llmModel: string;
   searchBudgetSeconds: number;
 }
+
+export type PublicExtensionSettings = ExtensionSettings & { hasApiKey?: boolean };
+
+export interface FeedbackRequestInput {
+  query: string;
+  executedSearches: { query: string; hitCount: number }[];
+  newCandidates: TopicCandidate[];
+  round: number;
+}
+
+export type ExtensionRequest =
+  | { type: 'settings:get' }
+  | { type: 'settings:save'; settings: Partial<ExtensionSettings> }
+  | { type: 'planner:first'; requestId: string; query: string }
+  | { type: 'planner:blind'; requestId: string; query: string }
+  | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput }
+  | { type: 'planner:cancel'; requestId: string };
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   llmBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',

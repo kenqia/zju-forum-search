@@ -1,6 +1,6 @@
 import { PlannerClient, PlannerError, type FeedbackInput, type PlannerTransport } from './planner';
 import { chatCompletionsUrl, modelHostPermission, normalizeSettings, validateSettings } from './settings';
-import { DEFAULT_SETTINGS, type ExtensionSettings } from './types';
+import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionSettings } from './types';
 
 export interface SettingsStorage {
   get(): Promise<Partial<ExtensionSettings>>;
@@ -35,6 +35,21 @@ interface ChromeApi {
   };
 }
 
+function isExtensionRequest(message: unknown): message is ExtensionRequest {
+  if (!message || typeof message !== 'object') return false;
+  const value = message as Record<string, unknown>;
+  if (value.type === 'settings:get') return true;
+  if (value.type === 'settings:save') return Boolean(value.settings) && typeof value.settings === 'object';
+  if (value.type === 'planner:cancel') return typeof value.requestId === 'string' && Boolean(value.requestId);
+  if (value.type === 'planner:first' || value.type === 'planner:blind') {
+    return typeof value.requestId === 'string' && Boolean(value.requestId) && typeof value.query === 'string';
+  }
+  if (value.type === 'planner:feedback') {
+    return typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object';
+  }
+  return false;
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return '模型规划失败，请检查设置后重试';
@@ -42,7 +57,7 @@ function errorMessage(error: unknown): string {
 
 function createTransport(dependencies: BackgroundDependencies): PlannerTransport {
   return {
-    async chatCompletions(settings, messages) {
+    async chatCompletions(settings, messages, signal) {
       let response: Response;
       try {
         response = await dependencies.fetch(chatCompletionsUrl(settings.llmBaseUrl), {
@@ -56,8 +71,10 @@ function createTransport(dependencies: BackgroundDependencies): PlannerTransport
             messages,
             response_format: { type: 'json_object' },
           }),
+          signal,
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw new PlannerError('模型请求已取消');
         throw new PlannerError('无法连接模型服务，请检查端点和网络');
       }
       if (!response.ok) throw new PlannerError(`模型服务返回 HTTP ${response.status}`);
@@ -76,11 +93,20 @@ function createTransport(dependencies: BackgroundDependencies): PlannerTransport
 
 export function createMessageHandler(dependencies: BackgroundDependencies) {
   const transport = createTransport(dependencies);
+  const plannerControllers = new Map<string, AbortController>();
   return (message: unknown, sendResponse: SendResponse): boolean => {
-    if (!message || typeof message !== 'object' || typeof (message as { type?: unknown }).type !== 'string') return false;
-    const request = message as Record<string, unknown>;
+    if (!isExtensionRequest(message)) return false;
+    const request = message;
     const type = request.type;
-    if (!['settings:get', 'settings:save', 'planner:first', 'planner:feedback', 'planner:blind'].includes(String(type))) return false;
+
+    if (type === 'planner:cancel') {
+      plannerControllers.get(request.requestId)?.abort();
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    const plannerController = type.startsWith('planner:') ? new AbortController() : null;
+    if (plannerController && 'requestId' in request) plannerControllers.set(request.requestId, plannerController);
 
     void (async () => {
       try {
@@ -90,7 +116,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
           return;
         }
         if (type === 'settings:save') {
-          const requested = normalizeSettings(request.settings as Partial<ExtensionSettings>);
+          const requested = normalizeSettings(request.settings);
           if (!requested.llmModel) throw new Error('请先填写模型名称');
           const permission = modelHostPermission(requested.llmBaseUrl);
           if (!await dependencies.requestPermission(permission)) throw new Error('未授予模型主机访问权限，设置没有保存');
@@ -104,13 +130,15 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         const settings = validateSettings({ ...DEFAULT_SETTINGS, ...await dependencies.storage.get() });
         const planner = new PlannerClient(transport, settings);
         if (type === 'planner:first') {
-          sendResponse({ ok: true, plan: await planner.planFirstRound(String(request.query ?? '')) });
+          sendResponse({ ok: true, plan: await planner.planFirstRound(request.query, plannerController!.signal) });
         } else if (type === 'planner:blind') {
-          sendResponse({ ok: true, plan: await planner.planBlindExpansion(String(request.query ?? '')) });
+          sendResponse({ ok: true, plan: await planner.planBlindExpansion(request.query, plannerController!.signal) });
         } else {
-          sendResponse({ ok: true, feedback: await planner.planFeedback(request.input as FeedbackInput) });
+          sendResponse({ ok: true, feedback: await planner.planFeedback(request.input as FeedbackInput, plannerController!.signal) });
         }
+        plannerControllers.delete(request.requestId);
       } catch (error) {
+        if ('requestId' in request) plannerControllers.delete(request.requestId);
         sendResponse({ ok: false, error: errorMessage(error) });
       }
     })();
@@ -144,5 +172,9 @@ function browserDependencies(chromeApi: ChromeApi): BackgroundDependencies {
 const chromeApi = (globalThis as typeof globalThis & { chrome?: ChromeApi }).chrome;
 if (chromeApi) {
   const handler = createMessageHandler(browserDependencies(chromeApi));
-  chromeApi.runtime.onMessage.addListener((message, _sender, sendResponse) => handler(message, sendResponse));
+  chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    const senderUrl = (sender as { url?: unknown } | undefined)?.url;
+    if (typeof senderUrl !== 'string' || !senderUrl.startsWith('https://www.cc98.org/')) return false;
+    return handler(message, sendResponse);
+  });
 }

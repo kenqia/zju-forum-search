@@ -16,6 +16,15 @@ describe('PlannerClient', () => {
     await expect(client.planFirstRound('高数资料')).rejects.toThrow('模型返回的查询计划结构无效');
   });
 
+  it('rejects malformed time constraint fields', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      summary: '高数', searches: [{ query: '高数', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '', start_date: null },
+    }) }, DEFAULT_SETTINGS);
+
+    await expect(client.planFirstRound('高数资料')).rejects.toThrow('模型返回的查询计划结构无效');
+  });
+
   it('normalizes the fixed first-round constraints', () => {
     expect(normalizeModelPlan({
       summary: '  资料 ',
@@ -79,7 +88,8 @@ describe('feedback privacy boundary', () => {
       plans: ['检索词'], firstRound: 1,
     }));
 
-    const content = buildFeedbackMessages({ query: '测试', executedSearches: [], newCandidates: candidates, round: 1 })[1].content;
+    const executedSearches = Array.from({ length: 30 }, (_, index) => ({ query: `检索词-${index}-${'中文'.repeat(100)}`, hitCount: index }));
+    const content = buildFeedbackMessages({ query: '测试'.repeat(500), executedSearches, newCandidates: candidates, round: 1 })[1].content;
 
     expect(new TextEncoder().encode(content).byteLength).toBeLessThanOrEqual(FEEDBACK_METADATA_TOKEN_LIMIT);
     expect(JSON.parse(content).new_candidates.length).toBeLessThan(candidates.length);

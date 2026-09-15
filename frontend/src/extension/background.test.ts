@@ -24,7 +24,7 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
   };
   const handler = createMessageHandler(dependencies);
   const send = (message: unknown) => new Promise<unknown>((resolve) => {
-    expect(handler(message, resolve)).toBe(true);
+    expect([true, false]).toContain(handler(message, resolve));
   });
   return { dependencies, send };
 }
@@ -80,7 +80,7 @@ describe('background message boundary', () => {
       },
     });
 
-    const response = await send({ type: 'planner:first', query: '找高数资料', body: '不得转发' });
+    const response = await send({ type: 'planner:first', requestId: 'request-1', query: '找高数资料', body: '不得转发' });
 
     expect(response).toMatchObject({ ok: true, plan: { searches: [{ query: '高数' }] } });
     expect(dependencies.fetch).toHaveBeenCalledOnce();
@@ -98,9 +98,28 @@ describe('background message boundary', () => {
       fetch: vi.fn(async () => new Response('{"choices":[]}', { status: 200 })),
     });
 
-    await expect(send({ type: 'planner:first', query: '高数' })).resolves.toEqual({
+    await expect(send({ type: 'planner:first', requestId: 'request-2', query: '高数' })).resolves.toEqual({
       ok: false,
       error: '模型没有返回文本内容',
     });
+  });
+
+  it('aborts an in-flight model request when the content session is cancelled', async () => {
+    let observedSignal: AbortSignal | undefined;
+    const { send } = harness({
+      fetch: vi.fn(async (_url: string, init?: RequestInit) => {
+        observedSignal = init?.signal ?? undefined;
+        if (observedSignal?.aborted) throw new DOMException('aborted', 'AbortError');
+        return new Promise<Response>((_resolve, reject) => {
+          observedSignal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+        });
+      }),
+    });
+
+    const pending = send({ type: 'planner:first', requestId: 'request-cancel', query: '高数' });
+    await send({ type: 'planner:cancel', requestId: 'request-cancel' });
+
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(pending).resolves.toEqual({ ok: false, error: '模型请求已取消' });
   });
 });

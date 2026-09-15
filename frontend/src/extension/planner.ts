@@ -1,7 +1,7 @@
-import type { ExtensionSettings, FeedbackPlan, ModelQueryPlan, TopicCandidate } from './types';
+import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, ModelQueryPlan, PlannedSearch } from './types';
 
 export interface PlannerTransport {
-  chatCompletions(settings: ExtensionSettings, messages: { role: string; content: string }[]): Promise<string>;
+  chatCompletions(settings: ExtensionSettings, messages: { role: string; content: string }[], signal?: AbortSignal): Promise<string>;
 }
 
 export class PlannerError extends Error {}
@@ -33,10 +33,9 @@ function textList(values: unknown): string[] {
   return uniqueBy(values.map(normalizeText).filter(Boolean), folded);
 }
 
-export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
-  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const searches = uniqueBy(
-    (Array.isArray(source.searches) ? source.searches : [])
+function searchList(values: unknown): PlannedSearch[] {
+  return uniqueBy(
+    (Array.isArray(values) ? values : [])
       .map((item) => ({
         query: normalizeText((item as Record<string, unknown>)?.query),
         purpose: normalizeText((item as Record<string, unknown>)?.purpose),
@@ -44,6 +43,11 @@ export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
       .filter((item) => item.query),
     (item) => folded(item.query),
   );
+}
+
+export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const searches = searchList(source.searches);
   const requiredConcepts = uniqueBy(
     (Array.isArray(source.required_concepts) ? source.required_concepts : [])
       .map((item) => ({
@@ -71,15 +75,7 @@ export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
 
 export function normalizeFeedbackPlan(raw: unknown): FeedbackPlan {
   const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const newSearches = uniqueBy(
-    (Array.isArray(source.new_searches) ? source.new_searches : [])
-      .map((item) => ({
-        query: normalizeText((item as Record<string, unknown>)?.query),
-        purpose: normalizeText((item as Record<string, unknown>)?.purpose),
-      }))
-      .filter((item) => item.query),
-    (item) => folded(item.query),
-  );
+  const newSearches = searchList(source.new_searches);
   return {
     newSearches,
     learnedTerms: textList(source.learned_terms),
@@ -108,15 +104,19 @@ function assertFirstPlanShape(value: unknown): asserts value is Record<string, u
     || !value.summary.trim()
     || !Array.isArray(value.searches)
     || !value.searches.length
-    || !value.searches.every((item) => isRecord(item) && typeof item.query === 'string' && typeof item.purpose === 'string')
+    || !value.searches.every((item) => isRecord(item) && typeof item.query === 'string' && item.query.trim() && typeof item.purpose === 'string')
     || !Array.isArray(value.required_concepts)
     || !value.required_concepts.every((item) => isRecord(item)
       && typeof item.name === 'string'
       && Array.isArray(item.expressions)
-      && item.expressions.every((expression) => typeof expression === 'string'))
+      && item.expressions.length > 0
+      && item.expressions.every((expression) => typeof expression === 'string' && expression.trim()))
     || !Array.isArray(value.excluded_terms)
     || !value.excluded_terms.every((term) => typeof term === 'string')
-    || !isRecord(value.time_constraint)) {
+    || !isRecord(value.time_constraint)
+    || typeof value.time_constraint.expression !== 'string'
+    || !(typeof value.time_constraint.start_date === 'string' || value.time_constraint.start_date === null)
+    || !(typeof value.time_constraint.end_date === 'string' || value.time_constraint.end_date === null)) {
     throw new PlannerError('模型返回的查询计划结构无效');
   }
 }
@@ -165,12 +165,7 @@ export const FEEDBACK_SYSTEM_PROMPT = `你是校园论坛迭代检索的反馈�
   "reasoning": "一句话说明判断"
 }`;
 
-export interface FeedbackInput {
-  query: string;
-  executedSearches: { query: string; hitCount: number }[];
-  newCandidates: TopicCandidate[];
-  round: number;
-}
+export type FeedbackInput = FeedbackRequestInput;
 
 export function buildFeedbackMessages(input: FeedbackInput): { role: string; content: string }[] {
   const encoder = new TextEncoder();
@@ -213,11 +208,11 @@ export function buildFeedbackMessages(input: FeedbackInput): { role: string; con
 export class PlannerClient {
   constructor(private transport: PlannerTransport, private settings: ExtensionSettings) {}
 
-  async planFirstRound(query: string): Promise<ModelQueryPlan> {
+  async planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
     const content = await this.transport.chatCompletions(this.settings, [
       { role: 'system', content: FIRST_ROUND_SYSTEM_PROMPT },
       { role: 'user', content: JSON.stringify({ query: query.trim() }) },
-    ]);
+    ], signal);
     const raw = parseJson(content);
     assertFirstPlanShape(raw);
     const plan = normalizeModelPlan(raw);
@@ -225,14 +220,14 @@ export class PlannerClient {
     return plan;
   }
 
-  async planFeedback(input: FeedbackInput): Promise<FeedbackPlan> {
-    const content = await this.transport.chatCompletions(this.settings, buildFeedbackMessages(input));
+  async planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
+    const content = await this.transport.chatCompletions(this.settings, buildFeedbackMessages(input), signal);
     const raw = parseJson(content);
     assertFeedbackShape(raw);
     return normalizeFeedbackPlan(raw);
   }
 
-  async planBlindExpansion(query: string): Promise<ModelQueryPlan> {
+  async planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
     const content = await this.transport.chatCompletions(this.settings, [
       { role: 'system', content: FIRST_ROUND_SYSTEM_PROMPT },
       {
@@ -242,7 +237,7 @@ export class PlannerClient {
           note: '第一轮检索词全部没有命中。请放宽约束，换用更宽的同义表达、上位词和常见说法重新生成检索词。',
         }),
       },
-    ]);
+    ], signal);
     const raw = parseJson(content);
     assertFirstPlanShape(raw);
     const plan = normalizeModelPlan(raw);

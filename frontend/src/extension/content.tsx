@@ -5,10 +5,10 @@ import panelCss from './panel.css?inline';
 import { Cc98Client, readCc98AccessToken } from './cc98';
 import type { FeedbackInput } from './planner';
 import { SearchSession, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { DEFAULT_SETTINGS, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan } from './types';
+import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
 
 export interface RuntimeMessenger {
-  send(message: unknown): Promise<Record<string, unknown>>;
+  send(message: ExtensionRequest): Promise<Record<string, unknown>>;
 }
 
 interface ChromeRuntime {
@@ -27,7 +27,7 @@ function chromeMessenger(runtime: ChromeRuntime): RuntimeMessenger {
   };
 }
 
-async function responseField<T>(runtime: RuntimeMessenger, message: unknown, field: string): Promise<T> {
+async function responseField<T>(runtime: RuntimeMessenger, message: ExtensionRequest, field: string): Promise<T> {
   const response = await runtime.send(message);
   if (response.ok !== true) throw new Error(typeof response.error === 'string' ? response.error : '扩展后台请求失败');
   return response[field] as T;
@@ -35,29 +35,45 @@ async function responseField<T>(runtime: RuntimeMessenger, message: unknown, fie
 
 class BackgroundPlanner implements SearchPlanner {
   constructor(private readonly runtime: RuntimeMessenger) {}
-  planFirstRound(query: string): Promise<ModelQueryPlan> {
-    return responseField(this.runtime, { type: 'planner:first', query }, 'plan');
+  private request<T>(message: { type: 'planner:first' | 'planner:blind'; query: string } | { type: 'planner:feedback'; input: FeedbackInput }, field: string, signal?: AbortSignal): Promise<T> {
+    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    const request = { ...message, requestId } as ExtensionRequest;
+    if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
+    const response = responseField<T>(this.runtime, request, field);
+    if (!signal) return response;
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => {
+        void this.runtime.send({ type: 'planner:cancel', requestId }).catch(() => undefined);
+        reject(new DOMException('模型请求已取消', 'AbortError'));
+      };
+      signal.addEventListener('abort', abort, { once: true });
+      void response.then(
+        (value) => { signal.removeEventListener('abort', abort); resolve(value); },
+        (error) => { signal.removeEventListener('abort', abort); reject(error); },
+      );
+    });
   }
-  planBlindExpansion(query: string): Promise<ModelQueryPlan> {
-    return responseField(this.runtime, { type: 'planner:blind', query }, 'plan');
+  planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
+    return this.request({ type: 'planner:first', query }, 'plan', signal);
   }
-  planFeedback(input: FeedbackInput): Promise<FeedbackPlan> {
-    return responseField(this.runtime, { type: 'planner:feedback', input }, 'feedback');
+  planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
+    return this.request({ type: 'planner:blind', query }, 'plan', signal);
+  }
+  planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
+    return this.request({ type: 'planner:feedback', input }, 'feedback', signal);
   }
 }
 
 const EMPTY_SNAPSHOT: SearchSnapshot = {
   query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
-  activeSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
+  activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
   stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。',
 };
 
-type PublicSettings = ExtensionSettings & { hasApiKey?: boolean };
-
 function SettingsPanel({ runtime, settings, onSettings }: {
   runtime: RuntimeMessenger;
-  settings: PublicSettings;
-  onSettings(settings: PublicSettings): void;
+  settings: PublicExtensionSettings;
+  onSettings(settings: PublicExtensionSettings): void;
 }) {
   const [draft, setDraft] = useState(settings);
   const [status, setStatus] = useState('API key 只保存在 chrome.storage，不会写入页面、日志或仓库。');
@@ -68,7 +84,7 @@ function SettingsPanel({ runtime, settings, onSettings }: {
     event.preventDefault();
     setSaving(true);
     try {
-      const saved = await responseField<PublicSettings>(runtime, { type: 'settings:save', settings: draft }, 'settings');
+      const saved = await responseField<PublicExtensionSettings>(runtime, { type: 'settings:save', settings: draft }, 'settings');
       onSettings(saved);
       setStatus('设置已保存，并已授予该模型主机的访问权限。');
     } catch (error) {
@@ -107,6 +123,7 @@ function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
     <summary>检索进度 · 第 {snapshot.round || 0} 轮 · {snapshot.requestsMade} 次请求</summary>
     <div className="term-group">首轮检索词<div className="chips">{planned.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>
     {snapshot.activeSearches.length > 0 && <div className="term-group">正在执行<div className="chips">{snapshot.activeSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
+    {snapshot.executedSearches.length > 0 && <div className="term-group">已执行<div className="chips">{snapshot.executedSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
     {snapshot.inactiveSearches.length > 0 && <div className="term-group">已停用<div className="chips">{snapshot.inactiveSearches.map((term) => <span className="chip inactive" key={term}>{term}</span>)}</div></div>}
     {snapshot.learnedTerms.length > 0 && <div className="term-group">学到的扩展词<div className="chips">{snapshot.learnedTerms.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
   </details>;
@@ -158,7 +175,7 @@ function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; setting
         ? <div className="empty">{snapshot.phase === 'complete' && snapshot.stopReason === 'no_results' ? '没有找到主题帖。' : '结果将在这里逐轮出现。'}</div>
         : snapshot.results.map((topic, index) => <article className="result" key={topic.id}>
           <span className="rank">{index + 1}</span>
-          <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复</p></div>
+          <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复 · 首次命中第 {topic.firstRound} 轮</p></div>
         </article>)}
     </div>
   </>;
@@ -167,9 +184,9 @@ function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; setting
 function App({ runtime }: { runtime: RuntimeMessenger }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'search' | 'settings'>('search');
-  const [settings, setSettings] = useState<PublicSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<PublicExtensionSettings>(DEFAULT_SETTINGS);
   useEffect(() => {
-    void responseField<PublicSettings>(runtime, { type: 'settings:get' }, 'settings').then(setSettings).catch(() => undefined);
+    void responseField<PublicExtensionSettings>(runtime, { type: 'settings:get' }, 'settings').then(setSettings).catch(() => undefined);
   }, [runtime]);
 
   return <>

@@ -31,6 +31,7 @@ export interface SearchSnapshot {
   requestsMade: number;
   plan: ModelQueryPlan | null;
   activeSearches: string[];
+  executedSearches: string[];
   inactiveSearches: string[];
   learnedTerms: string[];
   results: TopicCandidate[];
@@ -39,9 +40,9 @@ export interface SearchSnapshot {
 }
 
 export interface SearchPlanner {
-  planFirstRound(query: string): Promise<ModelQueryPlan>;
-  planFeedback(input: FeedbackInput): Promise<FeedbackPlan>;
-  planBlindExpansion(query: string): Promise<ModelQueryPlan>;
+  planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan>;
+  planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan>;
+  planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan>;
 }
 
 export interface Cc98SearchClient {
@@ -123,7 +124,7 @@ export class SearchSession {
   private requestedStop: SearchStopReason | null = null;
   private snapshot: SearchSnapshot = {
     query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
-    activeSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
+    activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
     stopReason: null, statusText: '',
   };
 
@@ -181,7 +182,7 @@ export class SearchSession {
 
     this.publish({ query: normalizedQuery, phase: 'planning', round, statusText: '正在规划首轮检索词…' });
     try {
-      const plan = await this.planner.planFirstRound(normalizedQuery);
+      const plan = await this.planner.planFirstRound(normalizedQuery, this.controller.signal);
       this.publish({ plan });
       searches = plan.searches;
 
@@ -232,13 +233,14 @@ export class SearchSession {
         this.publish({
           results: ranked,
           activeSearches: [],
+          executedSearches: [...executed.values()].map((search) => search.query),
           inactiveSearches: [...inactive],
           statusText: `第 ${round} 轮完成，新增 ${candidates.size - before} 个候选。`,
         });
 
         if (round === 1 && candidates.size === 0) {
           this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });
-          const blind = await this.planner.planBlindExpansion(normalizedQuery);
+          const blind = await this.planner.planBlindExpansion(normalizedQuery, this.controller.signal);
           searches = blind.searches;
           round += 1;
           continue;
@@ -252,7 +254,7 @@ export class SearchSession {
           executedSearches: [...executed.values()],
           newCandidates,
           round,
-        });
+        }, this.controller.signal);
         feedback.learnedTerms.forEach((term) => learned.add(term));
         feedback.stopSuggestions.forEach((suggestion) => {
           const match = executed.get(folded(suggestion));

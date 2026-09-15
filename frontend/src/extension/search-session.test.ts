@@ -79,6 +79,7 @@ describe('SearchSession', () => {
     expect((firstFeedbackInput as { newCandidates: unknown[] }).newCandidates[0]).not.toHaveProperty('body');
     expect(result.plan?.requiredConcepts).toEqual(initialPlan.requiredConcepts);
     expect(result.learnedTerms).toContain('工科数学分析');
+    expect(result.executedSearches).toEqual(expect.arrayContaining(['高数', '微积分', '工科数学分析', '无人使用的扩展词']));
     expect(result.inactiveSearches).toContain('微积分');
     expect(result.stopReason).toBe('no_new_candidates');
     expect(updates.length).toBeGreaterThan(2);
@@ -164,6 +165,48 @@ describe('SearchSession', () => {
     expect(searchTopics).toHaveBeenCalledOnce();
     expect(result.results).toHaveLength(1);
     expect(result.stopReason).toBe('user_stopped');
+  });
+
+  it('finishes promptly when stopped during model planning', async () => {
+    let planningSignal: AbortSignal | undefined;
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: (_query, signal) => {
+          planningSignal = signal;
+          return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }));
+        },
+        planFeedback: vi.fn(),
+        planBlindExpansion: vi.fn(),
+      },
+      cc98: { searchTopics: vi.fn() },
+      now: () => 0,
+    });
+
+    const running = session.run('高数', 60);
+    session.stop();
+    const result = await running;
+
+    expect(planningSignal?.aborted).toBe(true);
+    expect(result.stopReason).toBe('user_stopped');
+  });
+
+  it('stops at the time budget before requesting another full page', async () => {
+    let clockReads = 0;
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
+        planFeedback: vi.fn(),
+        planBlindExpansion: vi.fn(),
+      },
+      cc98: { searchTopics: vi.fn(async () => Array.from({ length: 20 }, (_, index) => ({ id: String(index), title: '高数' }))) },
+      sleep: async () => undefined,
+      now: () => (++clockReads <= 3 ? 0 : 1000),
+    });
+
+    const result = await session.run('高数', 1);
+
+    expect(result.requestsMade).toBe(1);
+    expect(result.stopReason).toBe('budget_exhausted');
   });
 
   it('exposes a Chinese status for every bounded stop condition', () => {
