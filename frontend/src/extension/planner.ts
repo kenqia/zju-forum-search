@@ -52,13 +52,15 @@ function validIsoDate(value: string | null): boolean {
 
 function validateTimeRange(plan: ModelQueryPlan, query: string): void {
   const { expression, startDate, endDate } = plan.timeConstraint;
-  const explicit = hasExplicitTimeConstraint(query) || Boolean(expression);
+  const explicit = hasExplicitTimeConstraint(query);
   if (!validIsoDate(startDate)
     || !validIsoDate(endDate)
     || (startDate !== null && endDate !== null && startDate > endDate)
+    || (!explicit && (startDate !== null || endDate !== null))
     || (explicit && startDate === null && endDate === null)) {
     throw new PlannerError('模型返回的时间范围无效');
   }
+  if (!explicit && expression) plan.timeConstraint.expression = '';
 }
 
 function uniqueBy<T>(values: T[], keyOf: (v: T) => string): T[] {

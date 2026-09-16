@@ -68,6 +68,26 @@ describe('PlannerClient', () => {
     }
   });
 
+  it('accepts a descriptive no-time expression when dates are empty for an untimed query', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      summary: '软件工程管理资料', searches: [{ query: '软件工程管理', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '无明确时间限制', start_date: null, end_date: null },
+    }) }, DEFAULT_SETTINGS);
+
+    await expect(client.planFirstRound('帮我查软件工程管理的资料和讨论')).resolves.toMatchObject({
+      timeConstraint: { expression: '', startDate: null, endDate: null },
+    });
+  });
+
+  it('rejects model-added dates when the query has no explicit time request', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      summary: '软件工程管理资料', searches: [{ query: '软件工程管理', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '近三年', start_date: '2023-09-16', end_date: '2026-09-16' },
+    }) }, DEFAULT_SETTINGS);
+
+    await expect(client.planFirstRound('帮我查软件工程管理的资料和讨论')).rejects.toThrow('模型返回的时间范围无效');
+  });
+
   it('normalizes the fixed first-round constraints', () => {
     expect(normalizeModelPlan({
       summary: '  资料 ',
