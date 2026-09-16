@@ -41,19 +41,36 @@ describe('PlannerClient', () => {
     await expect(client.planFirstRound('高数资料')).rejects.toThrow(PlannerError);
   });
 
-  it('rejects a first-round response with a partial schema', async () => {
-    const client = new PlannerClient({ chatCompletions: async () => '{"searches":[{"query":"高数"}]}' }, DEFAULT_SETTINGS);
-
-    await expect(client.planFirstRound('高数资料')).rejects.toThrow('模型返回的查询计划结构无效');
-  });
-
-  it('rejects malformed time constraint fields', async () => {
+  it('normalizes recoverable omissions and shorthand searches before validation', async () => {
     const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
-      summary: '高数', searches: [{ query: '高数', purpose: '' }], required_concepts: [], excluded_terms: [],
-      time_constraint: { expression: '', start_date: null },
+      searches: ['微积分', { query: '高数' }],
+      required_concepts: [{ name: '课程', expressions: [] }],
     }) }, DEFAULT_SETTINGS);
 
-    await expect(client.planFirstRound('高数资料')).rejects.toThrow('模型返回的查询计划结构无效');
+    await expect(client.planFirstRound('微积分')).resolves.toEqual({
+      summary: '微积分',
+      searches: [{ query: '微积分', purpose: '' }, { query: '高数', purpose: '' }],
+      requiredConcepts: [],
+      excludedTerms: [],
+      timeConstraint: { expression: '', startDate: null, endDate: null },
+    });
+  });
+
+  it('reports the semantic error when no usable search remains', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      summary: '空计划', searches: ['', { query: '  ' }],
+    }) }, DEFAULT_SETTINGS);
+
+    await expect(client.planFirstRound('帮我找微积分')).rejects.toThrow('模型没有返回可用检索词');
+  });
+
+  it('reports malformed dates as a time-range error', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      summary: '高数', searches: [{ query: '高数', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '2025 年', start_date: 'not-a-date', end_date: null },
+    }) }, DEFAULT_SETTINGS);
+
+    await expect(client.planFirstRound('2025 年高数资料')).rejects.toThrow('模型返回的时间范围无效');
   });
 
   it('rejects missing, invalid, or reversed dates for an explicit time request', async () => {

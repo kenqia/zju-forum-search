@@ -81,10 +81,16 @@ function textList(values: unknown): string[] {
 function searchList(values: unknown): PlannedSearch[] {
   return uniqueBy(
     (Array.isArray(values) ? values : [])
-      .map((item) => ({
-        query: normalizeText((item as Record<string, unknown>)?.query),
-        purpose: normalizeText((item as Record<string, unknown>)?.purpose),
-      }))
+      .map((item) => {
+        if (typeof item === 'string') return { query: normalizeText(item), purpose: '' };
+        const source = item && typeof item === 'object' && !Array.isArray(item)
+          ? item as Record<string, unknown>
+          : {};
+        return {
+          query: normalizeText(source.query),
+          purpose: normalizeText(source.purpose),
+        };
+      })
       .filter((item) => item.query),
     (item) => folded(item.query),
   );
@@ -143,29 +149,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function assertFirstPlanShape(value: unknown): asserts value is Record<string, unknown> {
-  if (!isRecord(value)
-    || typeof value.summary !== 'string'
-    || !value.summary.trim()
-    || !Array.isArray(value.searches)
-    || !value.searches.length
-    || !value.searches.every((item) => isRecord(item) && typeof item.query === 'string' && item.query.trim() && typeof item.purpose === 'string')
-    || !Array.isArray(value.required_concepts)
-    || !value.required_concepts.every((item) => isRecord(item)
-      && typeof item.name === 'string'
-      && Array.isArray(item.expressions)
-      && item.expressions.length > 0
-      && item.expressions.every((expression) => typeof expression === 'string' && expression.trim()))
-    || !Array.isArray(value.excluded_terms)
-    || !value.excluded_terms.every((term) => typeof term === 'string')
-    || !isRecord(value.time_constraint)
-    || typeof value.time_constraint.expression !== 'string'
-    || !(typeof value.time_constraint.start_date === 'string' || value.time_constraint.start_date === null)
-    || !(typeof value.time_constraint.end_date === 'string' || value.time_constraint.end_date === null)) {
-    throw new PlannerError('模型返回的查询计划结构无效');
-  }
-}
-
 function assertFeedbackShape(value: unknown): asserts value is Record<string, unknown> {
   if (!isRecord(value)
     || !Array.isArray(value.new_searches)
@@ -178,6 +161,14 @@ function assertFeedbackShape(value: unknown): asserts value is Record<string, un
     || typeof value.reasoning !== 'string') {
     throw new PlannerError('模型返回的反馈计划结构无效');
   }
+}
+
+function modelPlanFromContent(content: string, query: string): ModelQueryPlan {
+  const plan = normalizeModelPlan(parseJson(content));
+  if (!plan.summary) plan.summary = query;
+  if (!plan.searches.length) throw new PlannerError('模型没有返回可用检索词');
+  validateTimeRange(plan, query);
+  return plan;
 }
 
 export const FIRST_ROUND_SYSTEM_PROMPT = `你是校园论坛关键词检索规划器。根据用户的自然语言查询生成 JSON 查询计划。
@@ -263,12 +254,7 @@ export class PlannerClient {
       { role: 'system', content: FIRST_ROUND_SYSTEM_PROMPT },
       { role: 'user', content: JSON.stringify({ query: query.trim(), current_date: this.today() }) },
     ], signal);
-    const raw = parseJson(content);
-    assertFirstPlanShape(raw);
-    const plan = normalizeModelPlan(raw);
-    if (!plan.searches.length) throw new PlannerError('规划器没有生成有效检索词');
-    validateTimeRange(plan, query);
-    return plan;
+    return modelPlanFromContent(content, query);
   }
 
   async planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
@@ -290,11 +276,6 @@ export class PlannerClient {
         }),
       },
     ], signal);
-    const raw = parseJson(content);
-    assertFirstPlanShape(raw);
-    const plan = normalizeModelPlan(raw);
-    if (!plan.searches.length) throw new PlannerError('盲扩展没有生成有效检索词');
-    validateTimeRange(plan, query);
-    return plan;
+    return modelPlanFromContent(content, query);
   }
 }
