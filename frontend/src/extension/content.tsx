@@ -85,7 +85,7 @@ export function createBackgroundPlanner(runtime: RuntimeMessenger): SearchPlanne
 const EMPTY_SNAPSHOT: SearchSnapshot = {
   query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
   activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
-  outOfRangeCount: 0, stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。',
+  outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。',
 };
 
 function SettingsPanel({ runtime, settings, onSettings }: {
@@ -139,13 +139,16 @@ function SettingsPanel({ runtime, settings, onSettings }: {
 
 export function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
   const planned = snapshot.plan?.searches.map((search) => search.query) ?? [];
-  return <details>
+  return <>
+    {snapshot.planningNotice && <p className="fallback-notice" role="status">{snapshot.planningNotice}</p>}
+    <details>
     <summary>检索进度 · 第 {snapshot.round || 0} 轮 · {snapshot.requestsMade} 次请求</summary>
     <div className="term-group">首轮检索词<div className="chips">{planned.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>
     {snapshot.activeSearches.length > 0 && <div className="term-group">正在执行<div className="chips">{snapshot.activeSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
     {snapshot.executedSearches.length > 0 && <div className="term-group">已执行<div className="chips">{snapshot.executedSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
     {snapshot.inactiveSearches.length > 0 && <div className="term-group">未命中检索词<div className="chips">{snapshot.inactiveSearches.map((term) => <span className="chip inactive" key={term}>{term}</span>)}</div></div>}
-  </details>;
+    </details>
+  </>;
 }
 
 function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; settings: ExtensionSettings }) {

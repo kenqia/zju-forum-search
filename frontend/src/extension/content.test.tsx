@@ -15,9 +15,14 @@ describe('extension content UI', () => {
     const container = document.createElement('div');
     const root = createRoot(container);
     const snapshot: SearchSnapshot = {
-      query: '计算机网络', phase: 'complete', round: 2, requestsMade: 3, plan: null,
+      query: '计算机网络', phase: 'complete', round: 2, requestsMade: 3, plan: {
+        summary: '直接搜索原词：计算机网络', searches: [{ query: '计算机网络', purpose: '' }],
+        requiredConcepts: [], excludedTerms: [], timeConstraint: { expression: '', startDate: null, endDate: null },
+        usedOriginalQueryFallback: true,
+      },
       activeSearches: [], executedSearches: ['计算机网络', '计网'], inactiveSearches: ['计网'],
-      learnedTerms: ['网络原理'], results: [], outOfRangeCount: 0, stopReason: 'model_stop', statusText: '完成',
+      learnedTerms: ['网络原理'], results: [], outOfRangeCount: 0,
+      planningNotice: '模型计划无效，已直接搜索原词。', stopReason: 'model_stop', statusText: '完成',
     };
 
     await act(async () => {
@@ -28,6 +33,7 @@ describe('extension content UI', () => {
     expect(container.textContent).not.toContain('已停用');
     expect(container.textContent).not.toContain('学到的扩展词');
     expect(container.textContent).not.toContain('网络原理');
+    expect(container.textContent).toContain('模型计划无效，已直接搜索原词。');
     await act(async () => root.unmount());
   });
 

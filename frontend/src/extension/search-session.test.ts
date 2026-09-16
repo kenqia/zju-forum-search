@@ -312,6 +312,31 @@ describe('SearchSession', () => {
     expect(result.outOfRangeCount).toBe(0);
   });
 
+  it('continues CC98 search and preserves the original-query fallback notice', async () => {
+    const searchTopics = vi.fn(async () => [{ id: 'calculus', title: '微积分资料' }]);
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => ({
+          ...initialPlan,
+          summary: '直接搜索原词：微积分',
+          searches: [{ query: '微积分', purpose: '模型计划无效，直接使用用户原词' }],
+          usedOriginalQueryFallback: true,
+        }),
+        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
+        planBlindExpansion: vi.fn(),
+      },
+      cc98: { searchTopics },
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+
+    const result = await session.run('微积分', 60);
+
+    expect(searchTopics).toHaveBeenCalledWith('微积分', 0, 20, expect.any(AbortSignal));
+    expect(result.planningNotice).toBe('模型计划无效，已直接搜索原词。');
+    expect(result.results.map((topic) => topic.id)).toEqual(['calculus']);
+  });
+
   it('treats an all-out-of-range first round as empty and performs one blind expansion', async () => {
     const timedPlan: ModelQueryPlan = {
       ...initialPlan,

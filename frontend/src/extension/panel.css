@@ -91,6 +91,7 @@ summary { color: var(--green); cursor: pointer; font-weight: 800; }
 .result p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .empty { padding: 34px 12px; color: var(--muted); text-align: center; }
 .filtered-count { margin: 12px 0 4px; color: var(--muted); font-size: 10px; }
+.fallback-notice { margin: 12px 0; padding: 9px 11px; border-radius: 10px; color: #745426; background: #fff4cb; font-size: 10px; }
 .privacy { margin: 16px 0; padding: 10px 12px; color: #745426; background: #fff4cb; border-radius: 10px; font-size: 10px; }
 .settings-form { display: grid; gap: 12px; }
 .settings-form label { display: grid; gap: 5px; color: #5b655f; font-size: 11px; font-weight: 800; }

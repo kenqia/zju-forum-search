@@ -37,6 +37,7 @@ export interface SearchSnapshot {
   learnedTerms: string[];
   results: TopicCandidate[];
   outOfRangeCount: number;
+  planningNotice: string;
   stopReason: SearchStopReason | null;
   statusText: string;
 }
@@ -128,7 +129,7 @@ export class SearchSession {
   private snapshot: SearchSnapshot = {
     query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
     activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
-    outOfRangeCount: 0, stopReason: null, statusText: '',
+    outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '',
   };
 
   constructor(dependencies: SearchSessionDependencies) {
@@ -186,7 +187,10 @@ export class SearchSession {
     this.publish({ query: normalizedQuery, phase: 'planning', round, statusText: '正在规划首轮检索词…' });
     try {
       const plan = await this.planner.planFirstRound(normalizedQuery, this.controller.signal);
-      this.publish({ plan });
+      this.publish({
+        plan,
+        planningNotice: plan.usedOriginalQueryFallback ? '模型计划无效，已直接搜索原词。' : '',
+      });
       searches = plan.searches;
 
       const candidateView = () => rankAndFilterCandidates([...candidates.values()], plan, enforceTimeRange);
