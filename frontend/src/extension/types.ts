@@ -20,6 +20,7 @@ export interface ModelQueryPlan {
   requiredConcepts: RequiredConcept[];
   excludedTerms: string[];
   timeConstraint: TimeConstraint;
+  usedOriginalQueryFallback?: boolean;
 }
 
 export interface TopicCandidate {

@@ -64,6 +64,25 @@ describe('PlannerClient', () => {
     await expect(client.planFirstRound('帮我找微积分')).rejects.toThrow('模型没有返回可用检索词');
   });
 
+  it('falls back to a pure keyword when the returned plan cannot be recovered', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => '{"searches":[]}' }, DEFAULT_SETTINGS);
+
+    await expect(client.planFirstRound('微积分')).resolves.toMatchObject({
+      summary: '直接搜索原词：微积分',
+      searches: [{ query: '微积分', purpose: '模型计划无效，直接使用用户原词' }],
+      requiredConcepts: [],
+      excludedTerms: [],
+      timeConstraint: { expression: '', startDate: null, endDate: null },
+      usedOriginalQueryFallback: true,
+    });
+  });
+
+  it('does not use the keyword fallback for a natural-language phrase', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => '{"searches":[]}' }, DEFAULT_SETTINGS);
+
+    await expect(client.planFirstRound('帮我找 微积分资料')).rejects.toThrow('模型没有返回可用检索词');
+  });
+
   it('reports malformed dates as a time-range error', async () => {
     const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
       summary: '高数', searches: [{ query: '高数', purpose: '' }], required_concepts: [], excluded_terms: [],

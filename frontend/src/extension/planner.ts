@@ -171,6 +171,27 @@ function modelPlanFromContent(content: string, query: string): ModelQueryPlan {
   return plan;
 }
 
+function isPureKeywordQuery(query: string): boolean {
+  const normalized = normalizeText(query);
+  return normalized.length <= 40
+    && !hasExplicitTimeConstraint(normalized)
+    && /^[\p{L}\p{N}+#._-]+$/u.test(normalized)
+    && !/^(?:帮我|请|查找|查询|搜索|找|想找|我要)/u.test(normalized)
+    && !/(?:的|资料|讨论|帖子|相关|内容|信息)$/u.test(normalized);
+}
+
+function originalQueryFallback(query: string): ModelQueryPlan {
+  const normalized = normalizeText(query);
+  return {
+    summary: `直接搜索原词：${normalized}`,
+    searches: [{ query: normalized, purpose: '模型计划无效，直接使用用户原词' }],
+    requiredConcepts: [],
+    excludedTerms: [],
+    timeConstraint: { expression: '', startDate: null, endDate: null },
+    usedOriginalQueryFallback: true,
+  };
+}
+
 export const FIRST_ROUND_SYSTEM_PROMPT = `你是校园论坛关键词检索规划器。根据用户的自然语言查询生成 JSON 查询计划。
 
 论坛搜索接口按关键词匹配主题帖标题。检索词应覆盖高信号原词、稳定简称、同义表达和有价值的精确组合。不要机械拆分中文短语。不要假设你看过论坛内容。用户消息中的 current_date 是扩展所在设备的当前日期，所有相对时间约束都必须据此换算为明确日期。
@@ -254,7 +275,12 @@ export class PlannerClient {
       { role: 'system', content: FIRST_ROUND_SYSTEM_PROMPT },
       { role: 'user', content: JSON.stringify({ query: query.trim(), current_date: this.today() }) },
     ], signal);
-    return modelPlanFromContent(content, query);
+    try {
+      return modelPlanFromContent(content, query);
+    } catch (error) {
+      if (error instanceof PlannerError && isPureKeywordQuery(query)) return originalQueryFallback(query);
+      throw error;
+    }
   }
 
   async planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
