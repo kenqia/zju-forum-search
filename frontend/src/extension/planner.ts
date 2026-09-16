@@ -177,6 +177,7 @@ function isPureKeywordQuery(query: string): boolean {
     && !hasExplicitTimeConstraint(normalized)
     && /^[\p{L}\p{N}+#._-]+$/u.test(normalized)
     && !/^(?:帮我|请|查找|查询|搜索|找|想找|我要)/u.test(normalized)
+    && !/(?:有没有|哪里|哪个|什么|怎么|如何|是否|能否|关于|有关|推荐|求助|谁|为何|为什么)/u.test(normalized)
     && !/(?:的|资料|讨论|帖子|相关|内容|信息)$/u.test(normalized);
 }
 

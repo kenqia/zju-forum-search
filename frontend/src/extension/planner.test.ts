@@ -80,7 +80,9 @@ describe('PlannerClient', () => {
   it('does not use the keyword fallback for a natural-language phrase', async () => {
     const client = new PlannerClient({ chatCompletions: async () => '{"searches":[]}' }, DEFAULT_SETTINGS);
 
-    await expect(client.planFirstRound('帮我找 微积分资料')).rejects.toThrow('模型没有返回可用检索词');
+    for (const query of ['帮我找 微积分资料', '哪个老师讲微积分']) {
+      await expect(client.planFirstRound(query)).rejects.toThrow('模型没有返回可用检索词');
+    }
   });
 
   it('reports malformed dates as a time-range error', async () => {
