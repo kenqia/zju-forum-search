@@ -137,15 +137,14 @@ function SettingsPanel({ runtime, settings, onSettings }: {
   </>;
 }
 
-function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
+export function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
   const planned = snapshot.plan?.searches.map((search) => search.query) ?? [];
   return <details>
     <summary>检索进度 · 第 {snapshot.round || 0} 轮 · {snapshot.requestsMade} 次请求</summary>
     <div className="term-group">首轮检索词<div className="chips">{planned.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>
     {snapshot.activeSearches.length > 0 && <div className="term-group">正在执行<div className="chips">{snapshot.activeSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
     {snapshot.executedSearches.length > 0 && <div className="term-group">已执行<div className="chips">{snapshot.executedSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
-    {snapshot.inactiveSearches.length > 0 && <div className="term-group">已停用<div className="chips">{snapshot.inactiveSearches.map((term) => <span className="chip inactive" key={term}>{term}</span>)}</div></div>}
-    {snapshot.learnedTerms.length > 0 && <div className="term-group">学到的扩展词<div className="chips">{snapshot.learnedTerms.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
+    {snapshot.inactiveSearches.length > 0 && <div className="term-group">未命中检索词<div className="chips">{snapshot.inactiveSearches.map((term) => <span className="chip inactive" key={term}>{term}</span>)}</div></div>}
   </details>;
 }
 

@@ -1,14 +1,36 @@
 // @vitest-environment jsdom
 
 import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { describe, expect, it } from 'vitest';
 
-import { createBackgroundPlanner, mountExtension, type RuntimeMessenger } from './content';
+import { createBackgroundPlanner, mountExtension, Terms, type RuntimeMessenger } from './content';
+import type { SearchSnapshot } from './search-session';
 import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } from './types';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('extension content UI', () => {
+  it('labels zero-hit searches without showing learned-term audit metadata', async () => {
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const snapshot: SearchSnapshot = {
+      query: '计算机网络', phase: 'complete', round: 2, requestsMade: 3, plan: null,
+      activeSearches: [], executedSearches: ['计算机网络', '计网'], inactiveSearches: ['计网'],
+      learnedTerms: ['网络原理'], results: [], outOfRangeCount: 0, stopReason: 'model_stop', statusText: '完成',
+    };
+
+    await act(async () => {
+      root.render(<Terms snapshot={snapshot} />);
+    });
+
+    expect(container.textContent).toContain('未命中检索词');
+    expect(container.textContent).not.toContain('已停用');
+    expect(container.textContent).not.toContain('学到的扩展词');
+    expect(container.textContent).not.toContain('网络原理');
+    await act(async () => root.unmount());
+  });
+
   it('turns a feedback timeout into a partial-result stop reason', async () => {
     const runtime: RuntimeMessenger = {
       send: async <Request extends ExtensionRequest>(_message: Request) => ({
