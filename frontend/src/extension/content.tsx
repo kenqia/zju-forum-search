@@ -151,20 +151,35 @@ export function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
   </>;
 }
 
-function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; settings: ExtensionSettings }) {
-  const [query, setQuery] = useState('');
-  const [snapshot, setSnapshot] = useState<SearchSnapshot>(EMPTY_SNAPSHOT);
-  const session = useRef<SearchSession | null>(null);
-  const runId = useRef(0);
+interface SearchState {
+  query: string;
+  snapshot: SearchSnapshot;
+}
+
+interface SearchController {
+  session: SearchSession | null;
+  runId: number;
+}
+
+function SearchPanel({ runtime, settings, state, onState, controller }: {
+  runtime: RuntimeMessenger;
+  settings: ExtensionSettings;
+  state: SearchState;
+  onState(patch: Partial<SearchState>): void;
+  controller: SearchController;
+}) {
+  const { query, snapshot } = state;
+  const setQuery = (value: string) => onState({ query: value });
+  const setSnapshot = (next: SearchSnapshot) => onState({ snapshot: next });
   const running = snapshot.phase !== 'complete' && snapshot.round > 0;
 
   async function search(event: FormEvent) {
     event.preventDefault();
     const normalized = query.trim();
     if (!normalized) return;
-    session.current?.stop('replaced');
-    session.current = null;
-    const currentRun = ++runId.current;
+    controller.session?.stop('replaced');
+    controller.session = null;
+    const currentRun = ++controller.runId;
     const token = readCc98AccessToken(localStorage);
     if (!token) {
       setSnapshot({ ...EMPTY_SNAPSHOT, query: normalized, phase: 'complete', stopReason: 'not_logged_in', statusText: '请先登录 CC98，然后刷新页面再试。' });
@@ -173,15 +188,15 @@ function SearchPanel({ runtime, settings }: { runtime: RuntimeMessenger; setting
     const nextSession = new SearchSession({
       planner: createBackgroundPlanner(runtime),
       cc98: new Cc98Client(token),
-      onUpdate: (next) => { if (runId.current === currentRun) setSnapshot(next); },
+      onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
     });
-    session.current = nextSession;
+    controller.session = nextSession;
     await nextSession.run(normalized, settings.searchBudgetSeconds);
-    if (session.current === nextSession) session.current = null;
+    if (controller.session === nextSession) controller.session = null;
   }
 
   function stop() {
-    session.current?.stop('user_stopped');
+    controller.session?.stop('user_stopped');
   }
 
   return <>
@@ -208,6 +223,8 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'search' | 'settings'>('search');
   const [settings, setSettings] = useState<PublicExtensionSettings>(DEFAULT_SETTINGS);
+  const [searchState, setSearchState] = useState<SearchState>({ query: '', snapshot: EMPTY_SNAPSHOT });
+  const searchController = useRef<SearchController>({ session: null, runId: 0 });
   useEffect(() => {
     void runtime.send({ type: 'settings:get' }).then((response) => {
       if (response.ok) setSettings(response.settings);
@@ -225,7 +242,9 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
         <button className={`tab${tab === 'search' ? ' active' : ''}`} data-tab="search" type="button" onClick={() => setTab('search')}>搜索</button>
         <button className={`tab${tab === 'settings' ? ' active' : ''}`} data-tab="settings" type="button" onClick={() => setTab('settings')}>模型设置</button>
       </nav>
-      {tab === 'search' ? <SearchPanel runtime={runtime} settings={settings} /> : <SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} />}
+      {tab === 'search'
+        ? <SearchPanel runtime={runtime} settings={settings} state={searchState} onState={(patch) => setSearchState((current) => ({ ...current, ...patch }))} controller={searchController.current} />
+        : <SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} />}
       <p className="privacy">反馈轮只会向模型发送标题、作者、时间、板块和回复数。正文、回帖和 CC98 登录信息不会离开浏览器。</p>
     </aside>
   </>;
