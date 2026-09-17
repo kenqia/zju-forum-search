@@ -396,3 +396,22 @@ describe('SearchSession', () => {
     for (const reason of reasons) expect(stopReasonText(reason)).toMatch(/[\u3400-\u9fff]/u);
   });
 });
+
+
+describe('opaque source pagination', () => {
+  it('follows an empty-string cursor until the source returns undefined', async () => {
+    const source = asPageSource(async () => []);
+    const cursors: (string | undefined)[] = [];
+    source.search = async (_query, cursor) => {
+      cursors.push(cursor);
+      return { hits: [], nextCursor: cursor === undefined ? '' : undefined };
+    };
+    const planner = {
+      planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
+      planBlindExpansion: async () => ({ ...initialPlan, searches: [] }),
+      planFeedback: vi.fn(),
+    };
+    await new SearchSession({ source, planner, sleep: async () => undefined }).run('高数', 60);
+    expect(cursors).toEqual([undefined, '']);
+  });
+});

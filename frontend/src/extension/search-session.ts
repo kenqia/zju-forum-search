@@ -220,7 +220,7 @@ export class SearchSession {
           roundHits.set(folded(current.search.query), (roundHits.get(folded(current.search.query)) ?? 0) + page.hits.length);
           this.merge(page.hits, current.search.query, round, candidates);
           this.publish(candidateView());
-          if (page.nextCursor && page.nextCursor !== current.cursor) {
+          if (page.nextCursor !== undefined && page.nextCursor !== current.cursor) {
             queue.push({ search: current.search, cursor: page.nextCursor });
           }
         }

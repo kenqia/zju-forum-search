@@ -8,8 +8,8 @@ import {
   type SearchSourceAdapter,
   type SearchSourceSession,
   type SourceCapabilities,
-} from './types';
-import { normalizeText } from './planner';
+} from '../../types';
+import { normalizeText } from '../../planner';
 
 const PAGE_SIZE = 20;
 
@@ -34,18 +34,21 @@ export function readCc98AccessToken(storage: Pick<Storage, 'getItem'>): string |
   return /^Bearer\s+\S+$/iu.test(token) ? token : null;
 }
 
-function topicList(payload: unknown): Record<string, unknown>[] {
+function topicList(payload: unknown): unknown[] {
   const list = (value: unknown) => (Array.isArray(value) ? value : null);
   if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== 'object') return [];
+  if (!payload || typeof payload !== 'object') throw new SourceError('CC98 返回了无法识别的搜索结果。', 'invalid_response');
   const source = payload as { data?: unknown; items?: unknown };
   const items = list(source.data) ?? list(source.items)
     ?? (source.data && typeof source.data === 'object' ? list((source.data as { items?: unknown }).items) : null)
-    ?? [];
-  return items.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+    ?? null;
+  if (!items) throw new SourceError('CC98 返回了无法识别的搜索结果。', 'invalid_response');
+  return items;
 }
 
-function hitShape(raw: Record<string, unknown>, position: number): SearchHit | null {
+function toSearchHit(value: unknown, position: number): SearchHit | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
   const id = normalizeText(raw.id ?? raw.topicId ?? raw.topic_id);
   if (!id) return null;
   const rawUrl = normalizeText(raw.url ?? raw.link);
@@ -87,7 +90,7 @@ export class Cc98Client {
         headers: { Authorization: this.accessToken, Accept: 'application/json' },
       });
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      if (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError') throw error;
       throw new SourceError('无法连接 CC98，保留当前部分结果。', 'network');
     }
     if (response.status === 401) {
@@ -99,7 +102,12 @@ export class Cc98Client {
     if (!response.ok) throw new SourceError(`CC98 返回 HTTP ${response.status}，保留当前部分结果。`, 'network');
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes('json')) throw new SourceError('CC98 返回内容不是 JSON，请刷新登录后重试。', 'not_logged_in');
-    return response.json();
+    try {
+      return await response.json();
+    } catch (error) {
+      if (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError') throw error;
+      throw new SourceError('CC98 返回了无法解析的 JSON。', 'invalid_response');
+    }
   }
 }
 
@@ -118,7 +126,7 @@ export class Cc98SourceSession implements SearchSourceSession {
     const payload = await this.client.searchTopics(query, from, PAGE_SIZE, signal);
     const items = topicList(payload);
     const hits = items
-      .map((raw, index) => hitShape(raw, from + index + 1))
+      .map((raw, index) => toSearchHit(raw, from + index + 1))
       .filter((hit): hit is SearchHit => hit !== null);
     return {
       hits,
@@ -131,8 +139,8 @@ export const cc98Adapter: SearchSourceAdapter = {
   id: 'cc98',
   capabilities: CC98_CAPABILITIES,
   ratePolicy: CC98_RATE_POLICY,
-  pageMatches: ['*://www.cc98.org/*'],
-  apiHosts: ['https://api.cc98.org/'],
+  pageMatches: ['https://www.cc98.org/*'],
+  apiHosts: ['https://api.cc98.org/*'],
   createSession(pageContext: PageContext): SearchSourceSession {
     void pageContext;
     const token = readCc98AccessToken(localStorage);

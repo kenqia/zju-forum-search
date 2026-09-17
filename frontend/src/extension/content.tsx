@@ -2,10 +2,10 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import panelCss from './panel.css?inline';
 
-import { Cc98SourceSession, readCc98AccessToken } from './cc98';
+import { sourceRegistry } from './source-registry';
 import type { FeedbackInput } from './planner';
 import { SearchSession, SearchSessionError, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { DEFAULT_SETTINGS, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
+import { SourceError, DEFAULT_SETTINGS, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
 
 export interface RuntimeMessenger {
   send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
@@ -180,19 +180,26 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
     controller.session?.stop('replaced');
     controller.session = null;
     const currentRun = ++controller.runId;
-    const token = readCc98AccessToken(localStorage);
-    if (!token) {
-      setSnapshot({ ...EMPTY_SNAPSHOT, query: normalized, phase: 'complete', stopReason: 'not_logged_in', statusText: '请先登录 CC98，然后刷新页面再试。' });
-      return;
+    try {
+      const adapter = sourceRegistry.resolve(location.href);
+      if (!adapter) throw new Error('当前页面没有可用的搜索源。');
+      const source = await adapter.createSession({ url: location.href });
+      if (controller.runId !== currentRun) return;
+      const nextSession = new SearchSession({
+        planner: createBackgroundPlanner(runtime),
+        source,
+        onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
+      });
+      controller.session = nextSession;
+      await nextSession.run(normalized, settings.searchBudgetSeconds);
+      if (controller.session === nextSession) controller.session = null;
+    } catch (error) {
+      if (controller.runId !== currentRun) return;
+      const stopReason = error instanceof SourceError && error.code === 'not_logged_in' ? 'not_logged_in'
+        : error instanceof SourceError && error.code === 'rate_limited' ? 'rate_limited' : 'failed';
+      setSnapshot({ ...EMPTY_SNAPSHOT, query: normalized, phase: 'complete', stopReason,
+        statusText: error instanceof Error ? error.message : '无法创建搜索源。' });
     }
-    const nextSession = new SearchSession({
-      planner: createBackgroundPlanner(runtime),
-      source: new Cc98SourceSession(token),
-      onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
-    });
-    controller.session = nextSession;
-    await nextSession.run(normalized, settings.searchBudgetSeconds);
-    if (controller.session === nextSession) controller.session = null;
   }
 
   function stop() {

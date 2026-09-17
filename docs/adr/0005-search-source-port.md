@@ -63,3 +63,9 @@ UI → sourceRegistry.resolve(location.href)
 
 - ~~朵朵校友圈的认证方式、搜索 API、分页形态、字段与限流规则待调研~~ 已调研：`docs/research/duo-alumni-api-survey.md`。要点：微信扫码登录（token `ddtk` 存 `localStorage["auth-store"]`）、单 RPC 端点 `api.duoduo.link/api` + AES-GCM/RSA-OAEP 信封、offset 分页+`timestamp` 游标、无 title（`content` 即全文）、`capabilities={searchSurface:'fulltext', querySyntax:'plain-keyword'}`、搜索很可能要求登录态。`createSession` 形状与未决项（`ddtk`/`duo_session` 关系、`needCode` 阈值、`group_id` 语义）见该调研。
 - `pageMatches`/`apiHosts` 聚合进 manifest 的构建期生成暂不实现，先靠契约测试保证一致。
+
+## 2026-09-17 接手审查补记
+
+CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15–19 尚未落地。详见 [接手审查](../research/search-source-handoff-review.md)。
+
+上文“隐私边界物理上不可能被 adapter 扩张”的表述过强。字段白名单限制字段名称，不能证明字段内容来自元数据。朵朵方案将正文 `content` 截断为 `Candidate.title`，会与正文不出域约定冲突。接入前必须先明确正文派生显示标题与模型反馈的边界，本 ADR 不构成外发正文的授权。

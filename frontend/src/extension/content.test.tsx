@@ -2,7 +2,7 @@
 
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createBackgroundPlanner, mountExtension, Terms, type RuntimeMessenger } from './content';
 import type { SearchSnapshot } from './search-session';
@@ -88,5 +88,39 @@ describe('extension content UI', () => {
       (root.querySelector('[aria-label="关闭"]') as HTMLButtonElement).click();
     });
     expect(root.querySelector('[aria-label="CC98 自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+
+describe('registered source UI', () => {
+  it('shows the adapter login prompt without calling the model', async () => {
+    vi.stubGlobal('location', new URL('https://www.cc98.org/'));
+    vi.stubGlobal('localStorage', { getItem: () => null });
+    const messages: string[] = [];
+    const runtime: RuntimeMessenger = {
+      send: async <Request extends ExtensionRequest>(message: Request) => {
+        messages.push(message.type);
+        return { ok: true, settings: DEFAULT_SETTINGS } as ExtensionResponseFor<Request>;
+      },
+    };
+    // Use a separate document so prior mounts cannot affect this interaction.
+    const page = document.implementation.createHTMLDocument();
+    let mounted: ReturnType<typeof mountExtension>;
+    try {
+      await act(async () => { mounted = mountExtension(page, runtime, 'open'); });
+      const root = mounted!.shadowRoot;
+      const input = root.querySelector('[aria-label="自然语言查询"]') as HTMLInputElement;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '测试');
+        input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      });
+      await act(async () => {
+        root.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      });
+      expect(root.textContent).toContain('请先登录 CC98，然后刷新页面再试。');
+      expect(messages).toEqual(['settings:get']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

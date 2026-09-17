@@ -217,7 +217,7 @@ run_tests --reporter=verbose \
   src/extension/search-session.test.ts \
   src/extension/ranking.test.ts \
   src/extension/planner.test.ts \
-  src/extension/cc98.test.ts
+  src/extension/sites/cc98/index.test.ts
 say "已覆盖：首轮→反馈多轮、轮内广度优先分页、20 条/页、2 秒间隔、30 次硬上限、预算、盲扩展、should_stop、中文停止文案和最终词典序重排。"
 say "隐私断言还会验证：反馈负载排除正文、回帖和认证数据，仅保留白名单元数据并限制标题与整轮大小。"
 pause "阅读通过的测试名称后按 Enter"
