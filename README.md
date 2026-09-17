@@ -41,3 +41,7 @@ npm run build
 CC98 的认证读取、请求、响应解析和分页位于 `frontend/src/extension/sites/cc98/`。界面通过 `source-registry.ts` 按页面地址选择 adapter，再创建搜索 session；界面不接触论坛 token。当前只注册 CC98，manifest 权限未扩展到其他站点。
 
 计划缓存和“换一组检索词”入口已按 issue #10 的验收反馈撤回，再次提交查询会重新搜索。SearchSource 接手审查及朵朵接入前的未决项见 [审查记录](docs/research/search-source-handoff-review.md)。
+
+core 将候选对象、每次召回观察与排序文档分开保存。同一帖子被多词命中时，排序会使用所有文档中的本地片段，并从观察记录计算跨词命中和位次。结果卡片不携带内部排序键。
+
+反馈证据在 core 内构造，进入 planner 前已去除 ID、URL、片段和召回记录，并限制为最多 160 条、4000 UTF-8 字节。实际模型请求再次按白名单和字节上限序列化。正文派生标题只在本地显示，反馈标题为空；CC98 的原生标题反馈行为不变。

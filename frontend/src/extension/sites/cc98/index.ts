@@ -59,7 +59,7 @@ function toSearchHit(value: unknown, position: number): SearchHit | null {
   const author = normalizeText(raw.userName ?? raw.authorName ?? (raw.user as { name?: unknown } | undefined)?.name ?? raw.author);
   const replyCount = Number(raw.replyCount ?? raw.replies ?? 0) || 0;
   const candidate: Candidate = {
-    sourceId: 'cc98', id, title, url,
+    sourceId: 'cc98', id, title, titleOrigin: 'native', url,
     ...(author && { author }),
     ...(publishedAt && { publishedAt }),
     ...(section && { section }),

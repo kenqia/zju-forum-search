@@ -27,7 +27,7 @@ ADR-0004 把搜索定义为「模型规划 → 平台召回 → 本地重排 →
 ### 3. SearchHit、候选三层模型与 RankingDocument
 
 - `SearchHit = { candidate: Candidate, document: RankingDocument, position?: number }`：adapter 一次同时供出业务对象与重排证据。`position` 是**当前检索词的完整结果流中的 1-based 位次**（第 1 页 1–20，第 2 页 21–40），由 adapter 自行计算——分页细节既归 adapter，core 不拿 pageSize 反推；无可信位次的搜索源返回 `undefined`。否则跨页排序会把「第 2 页第 1 条」误当高位次。RankingDocument 至此不再是图上的虚线——它随每次召回真实抵达 core。
-- `Candidate`：`{ sourceId, id, title, url, author?, publishedAt?, section?, replyCount? }`。
+- `Candidate`：`{ sourceId, id, title, titleOrigin, url, author?, publishedAt?, section?, replyCount? }`。`titleOrigin` 为 `native` 或 `body-derived`；后者仅供本地展示，不作为标题发送给模型。
 - `RetrievedCandidate = { candidate, observations: RetrievalObservation[], documents: RankingDocument[] }`。core 不保存泛化「神秘分」；`RetrievalObservation = { round, query, position }` 忠实记录命中事实；`documents` 按 observation 次序累积——**同一 candidate 被多个检索词命中产生不同 snippet 时全部保留，不覆盖**。firstRound、跨检索命中、最佳位次全部由 observations 派生；ranking 自行决定如何使用多份 document（取并集/取首份等策略属 ranking 内部）。
 - `RankingDocument = { title, section?, author?, publishedAt?, replyCount?, snippet? }`：封闭 schema，由 adapter 供出。`snippet` 允许非 title-only 站点提供命中片段用于本地重排——只进本地排序，不自动进模型反馈。
 - `ScoredCandidate`：ranking 模块私有，排序键不再走私进公共类型。
@@ -35,7 +35,7 @@ ADR-0004 把搜索定义为「模型规划 → 平台召回 → 本地重排 →
 ### 4. 结构化 capabilities + core 构造的封闭白名单
 
 - `SourceCapabilities = { searchSurface: 'title' | 'fulltext' | 'mixed', querySyntax: 'plain-keyword' | 'boolean' }`：**只枚举 CC98 与朵朵实测出来的能力**，不为未来网站提前枚举；实测出现新形态时先扩 union 再实现。`plannerNotes` 不设自由文本字段——提示词完全由结构化字段生成。
-- `FeedbackEvidence`：core 拥有的封闭 schema `{ title, author?, publishedAt?, section?, replyCount? }` + 条数/字节上限（沿用 ADR-0004 白名单）。**完全由 core 从 `Candidate` 白名单字段构造，adapter 不再提供 `toFeedbackEvidence()`**——映射规则就是「取这几个字段」，没有 adapter 侧逻辑，隐私边界物理上不可能被 adapter 扩张。`snippet` 不属于 FeedbackEvidence，永不出域。
+- `FeedbackEvidence`：core 拥有的封闭 schema `{ title, author?, publishedAt?, section?, replyCount? }` + 条数/字节上限（沿用 ADR-0004 白名单）。**由 core 从 `Candidate` 白名单字段构造，adapter 不提供 `toFeedbackEvidence()`**。仅 `titleOrigin === native` 时复制标题；正文派生或缺少来源标记时，反馈标题为空字符串。其余字段仍按元数据白名单选择。`snippet`、ID、URL、observations 和本地排序键不跨越 planner 端口。标题来源是 adapter 必须遵守并测试的映射契约，字段白名单本身不证明来源可信。
 
 ### 5. Registry ↔ manifest 契约测试
 
@@ -66,6 +66,10 @@ UI → sourceRegistry.resolve(location.href)
 
 ## 2026-09-17 接手审查补记
 
-CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15–19 尚未落地。详见 [接手审查](../research/search-source-handoff-review.md)。
+CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型、SearchBudget 与 core 反馈白名单；#16 的能力提示词、#17–19 仍待实施。详见 [接手审查](../research/search-source-handoff-review.md)。
 
-上文“隐私边界物理上不可能被 adapter 扩张”的表述过强。字段白名单限制字段名称，不能证明字段内容来自元数据。朵朵方案将正文 `content` 截断为 `Candidate.title`，会与正文不出域约定冲突。接入前必须先明确正文派生显示标题与模型反馈的边界，本 ADR 不构成外发正文的授权。
+用户已确认继续沿用正文不出域约定。朵朵 `content` 可作为本地展示标题和 RankingDocument.snippet，但必须标记 `titleOrigin: body-derived`，反馈中的 title 为空。没有原生标题时，模型仅能依据查询、检索命中数与其他允许的元数据决定后续搜索，不能从正文学习词汇。#16 的提示词应如实说明这一限制。
+
+#15 的排序实现对每份 document 独立匹配，再取概念命中的并集，不把不同片段首尾拼成新词。时间使用第一份能解析日期的 document；展示元数据保留首次候选，首次轮次、不同查询数和最佳位次均由 observations 计算。排序键只存在 ranking 私有结构中，UI 结果保留现有展示字段。
+
+朵朵公开前端版本与指纹、公钥来源、OAEP hash、AES key/IV/tag 编码及合成数据离线复现已补入调研记录。登录后字段和风控语义仍须用户本人会话验收，不凭未登录空结果推定已验证。

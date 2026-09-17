@@ -1,5 +1,6 @@
-import type { ModelQueryPlan, TopicCandidate } from './types';
+import type { ModelQueryPlan, RetrievedCandidate, TopicCandidate } from './types';
 import { folded, normalizeText } from './planner';
+import { firstObservedRound } from './retrieval';
 
 function includesExpression(haystack: string, expression: string): boolean {
   const normalized = folded(expression);
@@ -17,83 +18,68 @@ function dateValue(value: unknown): number | null {
 
 type TimeStatus = 'in_range' | 'unknown' | 'out_of_range';
 
-function timeStatus(candidate: TopicCandidate, plan: ModelQueryPlan): TimeStatus {
+function timeStatus(entry: RetrievedCandidate, plan: ModelQueryPlan): TimeStatus {
   const start = dateValue(plan.timeConstraint.startDate);
   const end = dateValue(plan.timeConstraint.endDate);
   if (start === null && end === null) return 'in_range';
-  const published = dateValue(candidate.time);
-  if (published === null) return 'unknown';
-  const inRange = (start === null || published >= start) && (end === null || published <= end);
-  return inRange ? 'in_range' : 'out_of_range';
+  // The first known document date wins; later snippets cannot rewrite it.
+  const published = entry.documents.map((document) => dateValue(document.publishedAt)).find((date) => date !== null);
+  if (published === undefined) return 'unknown';
+  return (start === null || published >= start) && (end === null || published <= end) ? 'in_range' : 'out_of_range';
 }
 
 const TIME_ORDER: Record<TimeStatus, number> = { in_range: 0, unknown: 1, out_of_range: 2 };
 
-export function rankCandidates(candidates: TopicCandidate[], plan: ModelQueryPlan): TopicCandidate[] {
-  const ranked = candidates.map((candidate) => {
-    const haystack = folded(`${candidate.title} ${candidate.board}`);
-    const reasons: string[] = [];
+interface ScoredCandidate {
+  entry: RetrievedCandidate;
+  timeOrder: number;
+  excludedCount: number;
+  missingConceptCount: number;
+  queryCount: number;
+  bestPosition: number;
+  earliestRound: number;
+}
 
-    const matchedConcepts = plan.requiredConcepts.filter((concept) =>
-      concept.expressions.some((expression) => includesExpression(haystack, expression)),
-    );
-    const missingConcepts = plan.requiredConcepts.filter((concept) => !matchedConcepts.includes(concept));
-    if (matchedConcepts.length) {
-      reasons.push(`命中必须概念：${matchedConcepts.map((c) => c.name).join('、')}`);
-    }
-    if (missingConcepts.length) {
-      reasons.push(`缺少必须概念：${missingConcepts.map((c) => c.name).join('、')}`);
-    }
+function score(entry: RetrievedCandidate, plan: ModelQueryPlan): ScoredCandidate {
+  // Match within each document, then union the matched concepts. Joining snippets
+  // could fabricate a phrase across unrelated hits.
+  const texts = entry.documents.map((document) => folded(`${document.title} ${document.section ?? ''} ${document.snippet ?? ''}`));
+  const matches = (expression: string) => texts.some((text) => includesExpression(text, expression));
+  const positions = entry.observations.map((observation) => observation.position)
+    .filter((position): position is number => position !== undefined && Number.isFinite(position) && position >= 1);
+  return {
+    entry,
+    timeOrder: TIME_ORDER[timeStatus(entry, plan)],
+    excludedCount: plan.excludedTerms.filter(matches).length,
+    missingConceptCount: plan.requiredConcepts.filter((concept) => !concept.expressions.some(matches)).length,
+    queryCount: new Set(entry.observations.map((observation) => folded(observation.query))).size,
+    bestPosition: positions.reduce((best, position) => Math.min(best, position), Infinity),
+    earliestRound: firstObservedRound(entry),
+  };
+}
 
-    const matchedSearches = plan.searches.filter((search) => includesExpression(haystack, search.query));
-    if (matchedSearches.length) {
-      reasons.push(`标题命中 ${matchedSearches.length} 个检索词`);
-    }
+function displayResult({ entry, earliestRound }: ScoredCandidate): TopicCandidate {
+  const candidate = entry.candidate;
+  return {
+    id: candidate.id, title: candidate.title, url: candidate.url,
+    board: candidate.section ?? '', time: candidate.publishedAt ?? '',
+    author: candidate.author ?? '', replyCount: candidate.replyCount ?? 0,
+    firstRound: earliestRound,
+  };
+}
 
-    const exclusions = plan.excludedTerms.filter((term) => includesExpression(haystack, term));
-    if (exclusions.length) {
-      reasons.push(`命中排除词：${exclusions.join('、')}`);
-    }
-
-    const status = timeStatus(candidate, plan);
-    if (status === 'in_range' && (plan.timeConstraint.startDate || plan.timeConstraint.endDate)) {
-      reasons.push('发布时间符合时间约束');
-    } else if (status === 'out_of_range') {
-      reasons.push('发布时间不符合时间约束');
-    } else if (status === 'unknown' && (plan.timeConstraint.startDate || plan.timeConstraint.endDate)) {
-      reasons.push('发布时间未知');
-    }
-
-    if (!reasons.length) reasons.push('仅由 CC98 候选排名和跨查询命中支持');
-    return {
-      ...candidate,
-      missingRequiredCount: missingConcepts.length,
-      score: candidate.retrievalScore,
-      reason: reasons.join('；'),
-      _timeOrder: TIME_ORDER[status],
-      _excludedCount: exclusions.length,
-    } as TopicCandidate & { _timeOrder: number; _excludedCount: number };
-  });
-
+export function rankCandidates(candidates: RetrievedCandidate[], plan: ModelQueryPlan): TopicCandidate[] {
+  const ranked = candidates.map((entry) => score(entry, plan));
   ranked.sort((a, b) => {
-    const ao = (a as TopicCandidate & { _timeOrder: number })._timeOrder;
-    const bo = (b as TopicCandidate & { _timeOrder: number })._timeOrder;
-    if (ao !== bo) return ao - bo;
-    const ae = (a as TopicCandidate & { _excludedCount: number })._excludedCount;
-    const be = (b as TopicCandidate & { _excludedCount: number })._excludedCount;
-    if (ae !== be) return ae - be;
-    if ((a.missingRequiredCount ?? 0) !== (b.missingRequiredCount ?? 0)) {
-      return (a.missingRequiredCount ?? 0) - (b.missingRequiredCount ?? 0);
-    }
-    if (a.plans.length !== b.plans.length) return b.plans.length - a.plans.length;
-    if (a.bestRank !== b.bestRank) return a.bestRank - b.bestRank;
-    if (a.firstRound !== b.firstRound) return a.firstRound - b.firstRound;
-    return a.title.localeCompare(b.title, 'zh-CN');
+    if (a.timeOrder !== b.timeOrder) return a.timeOrder - b.timeOrder;
+    if (a.excludedCount !== b.excludedCount) return a.excludedCount - b.excludedCount;
+    if (a.missingConceptCount !== b.missingConceptCount) return a.missingConceptCount - b.missingConceptCount;
+    if (a.queryCount !== b.queryCount) return b.queryCount - a.queryCount;
+    if (a.bestPosition !== b.bestPosition) return a.bestPosition - b.bestPosition;
+    if (a.earliestRound !== b.earliestRound) return a.earliestRound - b.earliestRound;
+    return a.entry.candidate.title.localeCompare(b.entry.candidate.title, 'zh-CN');
   });
-  return ranked.map((r) => {
-    const { _timeOrder, _excludedCount, ...rest } = r as TopicCandidate & { _timeOrder: number; _excludedCount: number };
-    return rest;
-  });
+  return ranked.map(displayResult);
 }
 
 export interface RankedCandidateView {
@@ -102,15 +88,10 @@ export interface RankedCandidateView {
 }
 
 export function rankAndFilterCandidates(
-  candidates: TopicCandidate[],
-  plan: ModelQueryPlan,
-  enforceTimeRange: boolean,
+  candidates: RetrievedCandidate[], plan: ModelQueryPlan, enforceTimeRange: boolean,
 ): RankedCandidateView {
-  const outOfRangeCount = enforceTimeRange
-    ? candidates.filter((candidate) => timeStatus(candidate, plan) === 'out_of_range').length
-    : 0;
   const visible = enforceTimeRange
-    ? candidates.filter((candidate) => timeStatus(candidate, plan) !== 'out_of_range')
+    ? candidates.filter((entry) => timeStatus(entry, plan) !== 'out_of_range')
     : candidates;
-  return { results: rankCandidates(visible, plan), outOfRangeCount };
+  return { results: rankCandidates(visible, plan), outOfRangeCount: candidates.length - visible.length };
 }

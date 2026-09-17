@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildFeedbackMessages, FEEDBACK_METADATA_TOKEN_LIMIT, normalizeModelPlan, PlannerClient, PlannerError } from './planner';
-import { DEFAULT_SETTINGS, type TopicCandidate } from './types';
+import { DEFAULT_SETTINGS, type FeedbackEvidence } from './types';
 
 describe('PlannerClient', () => {
   it('sends the current local date in first, blind, and feedback planning calls', async () => {
@@ -149,8 +149,8 @@ describe('feedback privacy boundary', () => {
       id: 'secret-id',
       title: '题'.repeat(100),
       author: 'alice',
-      board: '学习天地',
-      time: '2026-09-15',
+      section: '学习天地',
+      publishedAt: '2026-09-15',
       replyCount: 8,
       url: 'https://www.cc98.org/topic/1',
       retrievalScore: 1,
@@ -160,7 +160,7 @@ describe('feedback privacy boundary', () => {
       body: '正文不得出域',
       replies: ['回帖不得出域'],
       authorization: 'Bearer secret',
-    } as TopicCandidate & Record<string, unknown>;
+    } as FeedbackEvidence & Record<string, unknown>;
 
     const messages = buildFeedbackMessages({
       query: '找高数资料',
@@ -184,8 +184,8 @@ describe('feedback privacy boundary', () => {
 
   it('caps the complete feedback metadata payload conservatively by UTF-8 bytes', () => {
     const candidates = Array.from({ length: 200 }, (_, index) => ({
-      id: String(index), title: `主题-${index}-${'中文'.repeat(80)}`, author: '作者', board: '学习天地',
-      time: '2026-09-15', replyCount: index, url: '', retrievalScore: 1, bestRank: index + 1,
+      id: String(index), title: `主题-${index}-${'中文'.repeat(80)}`, author: '作者', section: '学习天地',
+      publishedAt: '2026-09-15', replyCount: index, url: '', retrievalScore: 1, bestRank: index + 1,
       plans: ['检索词'], firstRound: 1,
     }));
 

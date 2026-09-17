@@ -1,3 +1,4 @@
+import { FEEDBACK_TITLE_LIMIT, FEEDBACK_CANDIDATE_LIMIT, FEEDBACK_METADATA_BYTE_LIMIT } from './feedback-evidence';
 import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, ModelQueryPlan, PlannedSearch } from './types';
 
 export interface PlannerTransport {
@@ -12,9 +13,8 @@ export class PlannerError extends Error {
   }
 }
 
-const TITLE_LIMIT = 80;
-const FEEDBACK_CANDIDATE_LIMIT = 160;
-export const FEEDBACK_METADATA_TOKEN_LIMIT = 4000;
+// Legacy export name; the bound is UTF-8 bytes, not model tokens.
+export const FEEDBACK_METADATA_TOKEN_LIMIT = FEEDBACK_METADATA_BYTE_LIMIT;
 
 export function normalizeText(value: unknown): string {
   return String(value ?? '').trim().replace(/\s+/gu, ' ');
@@ -243,11 +243,11 @@ export function buildFeedbackMessages(input: FeedbackInput, currentDate?: string
   }
   for (const candidate of input.newCandidates.slice(0, FEEDBACK_CANDIDATE_LIMIT)) {
     const approved = {
-      title: candidate.title.slice(0, TITLE_LIMIT),
-      author: candidate.author.slice(0, 80),
-      board: candidate.board.slice(0, 80),
-      time: candidate.time.slice(0, 40),
-      reply_count: candidate.replyCount,
+      title: candidate.title.slice(0, FEEDBACK_TITLE_LIMIT),
+      author: (candidate.author ?? '').slice(0, 80),
+      board: (candidate.section ?? '').slice(0, 80),
+      time: (candidate.publishedAt ?? '').slice(0, 40),
+      reply_count: candidate.replyCount ?? 0,
     };
     payload.new_candidates.push(approved);
     if (encoder.encode(JSON.stringify(payload)).byteLength > FEEDBACK_METADATA_TOKEN_LIMIT) {

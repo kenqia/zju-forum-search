@@ -1,12 +1,15 @@
 import type { FeedbackInput } from './planner';
 import { folded, hasExplicitTimeConstraint, normalizeText } from './planner';
 import { rankAndFilterCandidates } from './ranking';
+import { firstObservedRound, mergeHits } from './retrieval';
+import { createFeedbackInput } from './feedback-evidence';
+import { SearchBudget } from './search-budget';
 import {
   SourceError,
   type FeedbackPlan,
   type ModelQueryPlan,
   type PlannedSearch,
-  type SearchHit,
+  type RetrievedCandidate,
   type SearchSourceSession,
   type TopicCandidate,
 } from './types';
@@ -60,26 +63,6 @@ export class SearchSessionError extends Error {
   constructor(message: string, readonly reason: SearchStopReason = 'failed') {
     super(message);
   }
-}
-
-function hitShape(hit: SearchHit, query: string, round: number): TopicCandidate | null {
-  const { candidate, position } = hit;
-  const id = normalizeText(candidate.id);
-  if (!id) return null;
-  const rank = position ?? Number.MAX_SAFE_INTEGER;
-  return {
-    id,
-    title: normalizeText(candidate.title) || `主题 ${id}`,
-    board: normalizeText(candidate.section),
-    time: normalizeText(candidate.publishedAt),
-    author: normalizeText(candidate.author),
-    replyCount: candidate.replyCount ?? 0,
-    url: normalizeText(candidate.url),
-    retrievalScore: position ? 1 / Math.sqrt(position) : 0,
-    bestRank: rank,
-    plans: [query],
-    firstRound: round,
-  };
 }
 
 export function stopReasonText(reason: SearchStopReason): string {
@@ -137,29 +120,11 @@ export class SearchSession {
     return this.snapshot;
   }
 
-  private merge(hits: SearchHit[], query: string, round: number, candidates: Map<string, TopicCandidate>): TopicCandidate[] {
-    const added: TopicCandidate[] = [];
-    hits.forEach((hit) => {
-      const shaped = hitShape(hit, query, round);
-      if (!shaped) return;
-      const existing = candidates.get(shaped.id);
-      if (existing) {
-        existing.retrievalScore += shaped.retrievalScore;
-        existing.bestRank = Math.min(existing.bestRank, shaped.bestRank);
-        if (!existing.plans.some((value) => folded(value) === folded(query))) existing.plans.push(query);
-        return;
-      }
-      candidates.set(shaped.id, shaped);
-      added.push(shaped);
-    });
-    return added;
-  }
-
   async run(query: string, budgetSeconds: number): Promise<SearchSnapshot> {
     const normalizedQuery = normalizeText(query);
     const enforceTimeRange = hasExplicitTimeConstraint(normalizedQuery);
-    let remainingBudgetMs = Math.max(1, budgetSeconds) * 1000;
-    const candidates = new Map<string, TopicCandidate>();
+    const budget = new SearchBudget(budgetSeconds, this.now);
+    const candidates = new Map<string, RetrievedCandidate>();
     const executed = new Map<string, { query: string; hitCount: number }>();
     const inactive = new Set<string>();
     const learned = new Set<string>();
@@ -180,7 +145,7 @@ export class SearchSession {
 
       while (true) {
         if (this.requestedStop) return this.finish(this.requestedStop);
-        if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
+        if (budget.exhausted) return this.finish('budget_exhausted');
         const deduped = searches.filter((search, index, all) => {
           const key = folded(search.query);
           return key && !executed.has(key) && all.findIndex((item) => folded(item.query) === key) === index;
@@ -199,26 +164,17 @@ export class SearchSession {
         while (queue.length) {
           if (this.requestedStop) return this.finish(this.requestedStop);
           if (this.snapshot.requestsMade >= maxSearchCalls) return this.finish('request_limit', `已达到 ${maxSearchCalls} 次搜索请求硬上限，保留当前部分结果。`);
-          if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
+          if (budget.exhausted) return this.finish('budget_exhausted');
           const current = queue.shift()!;
           if (this.snapshot.requestsMade > 0) {
-            const waitMs = Math.min(minRequestIntervalMs, remainingBudgetMs);
-            const waitStarted = this.now();
-            await this.sleep(waitMs);
-            remainingBudgetMs -= Math.max(waitMs, Math.max(0, this.now() - waitStarted));
+            await budget.wait(minRequestIntervalMs, this.sleep);
             if (this.requestedStop) return this.finish(this.requestedStop);
-            if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
+            if (budget.exhausted) return this.finish('budget_exhausted');
           }
           this.publish({ requestsMade: this.snapshot.requestsMade + 1 });
-          const requestStarted = this.now();
-          let page;
-          try {
-            page = await this.source.search(current.search.query, current.cursor, this.controller.signal);
-          } finally {
-            remainingBudgetMs -= Math.max(0, this.now() - requestStarted);
-          }
+          const page = await budget.request(() => this.source.search(current.search.query, current.cursor, this.controller.signal));
           roundHits.set(folded(current.search.query), (roundHits.get(folded(current.search.query)) ?? 0) + page.hits.length);
-          this.merge(page.hits, current.search.query, round, candidates);
+          mergeHits(candidates, page.hits, current.search.query, round);
           this.publish(candidateView());
           if (page.nextCursor !== undefined && page.nextCursor !== current.cursor) {
             queue.push({ search: current.search, cursor: page.nextCursor });
@@ -233,7 +189,7 @@ export class SearchSession {
         const view = candidateView();
         const visibleIds = new Set(view.results.map((candidate) => candidate.id));
         const newCandidates = [...candidates.values()].filter(
-          (candidate) => candidate.firstRound === round && visibleIds.has(candidate.id),
+          (candidate) => firstObservedRound(candidate) === round && visibleIds.has(candidate.candidate.id),
         );
         this.publish({
           ...view,
@@ -243,7 +199,7 @@ export class SearchSession {
           statusText: `第 ${round} 轮完成，新增 ${view.results.length - before} 个候选。`,
         });
 
-        if (remainingBudgetMs <= 0) return this.finish('budget_exhausted');
+        if (budget.exhausted) return this.finish('budget_exhausted');
 
         if (round === 1 && view.results.length === 0) {
           this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });
@@ -256,12 +212,12 @@ export class SearchSession {
         if (newCandidates.length === 0) return this.finish('no_new_candidates');
 
         this.publish({ phase: 'feedback', statusText: `正在根据第 ${round} 轮新增候选学习检索词…` });
-        const feedback = await this.planner.planFeedback({
+        const feedback = await this.planner.planFeedback(createFeedbackInput({
           query: normalizedQuery,
           executedSearches: [...executed.values()],
-          newCandidates,
+          newCandidates: newCandidates.map((entry) => entry.candidate),
           round,
-        }, this.controller.signal);
+        }), this.controller.signal);
         feedback.learnedTerms.forEach((term) => learned.add(term));
         feedback.stopSuggestions.forEach((suggestion) => {
           const match = executed.get(folded(suggestion));

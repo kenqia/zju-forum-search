@@ -16,7 +16,7 @@ function asPageSource(searchTopics: (query: string, from: number, size: number, 
         const id = String(raw.id ?? `hit-${from + index}`);
         const title = String(raw.title ?? `主题 ${id}`);
         const candidate = {
-          sourceId: 'cc98', id, title,
+          sourceId: 'cc98', id, title, titleOrigin: 'native' as const,
           url: String(raw.url ?? `https://www.cc98.org/topic/${id}`),
           ...(raw.userName ? { author: String(raw.userName) } : {}),
           ...(raw.time ? { publishedAt: String(raw.time) } : {}),
@@ -310,7 +310,9 @@ describe('SearchSession', () => {
 
     expect(result.results.map((topic) => topic.id)).toEqual(['recent']);
     expect(result.outOfRangeCount).toBe(1);
-    expect(feedbackCandidates).toMatchObject([{ id: 'recent' }]);
+    expect(feedbackCandidates).toMatchObject([{ title: '微积分期末资料', publishedAt: '2025-01-01' }]);
+    expect(feedbackCandidates).toHaveLength(1);
+    expect(feedbackCandidates[0]).not.toHaveProperty('id');
   });
 
   it('keeps topics from every year when the query has no explicit time request', async () => {
@@ -413,5 +415,118 @@ describe('opaque source pagination', () => {
     };
     await new SearchSession({ source, planner, sleep: async () => undefined }).run('高数', 60);
     expect(cursors).toEqual([undefined, '']);
+  });
+});
+
+describe('retrieved candidate documents', () => {
+  it('keeps every hit document for local ranking without changing displayed metadata', async () => {
+    const source = {
+      sourceId: 'example',
+      capabilities: { searchSurface: 'fulltext' as const, querySyntax: 'plain-keyword' as const },
+      ratePolicy: { maxSearchCalls: 10, minRequestIntervalMs: 0 },
+      async search(query: string) {
+        return { hits: ['complete', 'partial'].map((id) => ({
+          candidate: { sourceId: 'example', id, title: '展示标题', titleOrigin: 'native' as const, url: `https://example.test/${id}` },
+          document: { title: '排序证据', snippet: id === 'complete' && query === '第二词' ? 'beta' : 'alpha' },
+          position: id === 'complete' ? 20 : 1,
+        })) };
+      },
+    };
+    const result = await new SearchSession({
+      source,
+      planner: {
+        planFirstRound: async () => ({ ...initialPlan,
+          searches: [{ query: '第一词', purpose: '' }, { query: '第二词', purpose: '' }],
+          requiredConcepts: [{ name: 'A', expressions: ['alpha'] }, { name: 'B', expressions: ['beta'] }],
+        }),
+        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planBlindExpansion: vi.fn(),
+      },
+      sleep: async () => undefined,
+    }).run('测试', 60);
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['complete', 'partial']);
+    expect(result.results[0]).toMatchObject({ title: '展示标题', firstRound: 1 });
+    expect(result.results[0]).not.toHaveProperty('snippet');
+    expect(result.results[0]).not.toHaveProperty('bestRank');
+  });
+});
+
+describe('core feedback privacy', () => {
+  it('keeps body-derived titles and snippets local while sending only approved metadata', async () => {
+    const planFeedback = vi.fn(async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }));
+    const session = new SearchSession({
+      source: {
+        sourceId: 'example', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword' },
+        ratePolicy: { maxSearchCalls: 2, minRequestIntervalMs: 0 },
+        search: async () => ({ hits: [{
+          candidate: { sourceId: 'example', id: 'local-id', title: '正文派生的秘密标题', titleOrigin: 'body-derived' as const,
+            url: 'https://example.test/private', author: '公开作者', publishedAt: '2026-09-17', section: '公开板块', replyCount: 2,
+            body: '隐藏正文', credential: 'synthetic-secret',
+          },
+          document: { title: '另一段正文', snippet: '只能留在本地的片段' }, position: 1,
+        }] }),
+      },
+      planner: { planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '测试', purpose: '' }] }),
+        planFeedback, planBlindExpansion: vi.fn() },
+    });
+    const result = await session.run('测试', 60);
+    expect(result.results[0].title).toBe('正文派生的秘密标题');
+    expect(planFeedback).toHaveBeenCalledWith({ query: '测试', round: 1,
+      executedSearches: [{ query: '测试', hitCount: 1 }],
+      newCandidates: [{ title: '', author: '公开作者', publishedAt: '2026-09-17', section: '公开板块', replyCount: 2 }],
+    }, expect.any(AbortSignal));
+  });
+});
+
+describe('source policy and search budget', () => {
+  it('uses a non-CC98 request policy and never charges planner waits', async () => {
+    let clock = 0;
+    const waits: number[] = [];
+    const search = vi.fn(async () => { clock += 100; return { hits: [], nextCursor: 'next' }; });
+    const result = await new SearchSession({
+      source: { sourceId: 'example', capabilities: { searchSurface: 'mixed', querySyntax: 'plain-keyword' },
+        ratePolicy: { maxSearchCalls: 2, minRequestIntervalMs: 7 }, search },
+      planner: { planFirstRound: async () => { clock += 90_000; return initialPlan; },
+        planFeedback: vi.fn(), planBlindExpansion: vi.fn() },
+      now: () => clock,
+      sleep: async (ms) => { waits.push(ms); clock += ms; },
+    }).run('测试', 1);
+    expect(result.stopReason).toBe('request_limit');
+    expect(result.statusText).toContain('2 次');
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(waits).toEqual([7]);
+  });
+});
+
+describe('bounded feedback at the planner port', () => {
+  it('limits UTF-8 metadata before it leaves core, not only before HTTP serialization', async () => {
+    let received = '';
+    let count = 0;
+    const session = new SearchSession({
+      source: {
+        sourceId: 'example', ratePolicy: { maxSearchCalls: 1, minRequestIntervalMs: 0 },
+        capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' },
+        search: async () => ({ hits: Array.from({ length: 200 }, (_, index) => ({
+          candidate: { sourceId: 'example', id: String(index), title: '中文'.repeat(100), titleOrigin: 'native' as const,
+            author: '作者'.repeat(100), section: '板块'.repeat(100), url: 'https://example.test/' },
+          document: { title: '中文' }, position: index + 1,
+        })) }),
+      },
+      planner: {
+        planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '中文', purpose: '' }] }),
+        planFeedback: async (input) => {
+          received = JSON.stringify(input);
+          count = input.newCandidates.length;
+          return { newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' };
+        },
+        planBlindExpansion: vi.fn(),
+      },
+    });
+    const result = await session.run('测试', 60);
+    expect(result.results).toHaveLength(200);
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThan(160);
+    expect(new TextEncoder().encode(received).byteLength).toBeLessThanOrEqual(4000);
+    expect(received).not.toContain('https://example.test/');
   });
 });

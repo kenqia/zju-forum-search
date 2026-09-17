@@ -23,6 +23,7 @@ export interface ModelQueryPlan {
   usedOriginalQueryFallback?: boolean;
 }
 
+/** Display-only search result; ranking keys stay private to ranking.ts. */
 export interface TopicCandidate {
   id: string;
   title: string;
@@ -31,13 +32,7 @@ export interface TopicCandidate {
   author: string;
   replyCount: number;
   url: string;
-  retrievalScore: number;
-  bestRank: number;
-  plans: string[];
   firstRound: number;
-  score?: number;
-  reason?: string;
-  missingRequiredCount?: number;
 }
 
 export interface RatePolicy {
@@ -60,6 +55,8 @@ export class SourceError extends Error {
 }
 
 export interface Candidate {
+  /** Only native titles may enter model feedback; body-derived titles stay local. */
+  titleOrigin: 'native' | 'body-derived';
   sourceId: string;
   id: string;
   title: string;
@@ -152,7 +149,7 @@ export type PublicExtensionSettings = ExtensionSettings & { hasApiKey?: boolean 
 export interface FeedbackRequestInput {
   query: string;
   executedSearches: { query: string; hitCount: number }[];
-  newCandidates: TopicCandidate[];
+  newCandidates: FeedbackEvidence[];
   round: number;
 }
 
