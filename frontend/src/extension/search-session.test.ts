@@ -3,6 +3,33 @@ import { describe, expect, it, vi } from 'vitest';
 import { SearchSession, SearchSessionError, stopReasonText, type SearchStopReason } from './search-session';
 import type { ModelQueryPlan } from './types';
 
+
+function asPageSource(searchTopics: (query: string, from: number, size: number, signal?: AbortSignal) => Promise<unknown[]>) {
+  return {
+    sourceId: 'cc98' as const,
+    ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 2000 },
+    capabilities: { searchSurface: 'title' as const, querySyntax: 'plain-keyword' as const },
+    async search(query: string, cursor: string | undefined, signal?: AbortSignal) {
+      const from = cursor ? Number.parseInt(cursor, 10) : 0;
+      const items = (await searchTopics(query, from, 20, signal)) as Record<string, unknown>[];
+      const hits = items.map((raw, index) => {
+        const id = String(raw.id ?? `hit-${from + index}`);
+        const title = String(raw.title ?? `主题 ${id}`);
+        const candidate = {
+          sourceId: 'cc98', id, title,
+          url: String(raw.url ?? `https://www.cc98.org/topic/${id}`),
+          ...(raw.userName ? { author: String(raw.userName) } : {}),
+          ...(raw.time ? { publishedAt: String(raw.time) } : {}),
+          ...(raw.boardName ? { section: String(raw.boardName) } : {}),
+          ...(typeof raw.replyCount === 'number' ? { replyCount: raw.replyCount } : {}),
+        };
+        return { candidate, document: { ...candidate }, position: from + index + 1 };
+      });
+      return { hits, nextCursor: items.length === 20 ? String(from + 20) : undefined };
+    },
+  };
+}
+
 const initialPlan: ModelQueryPlan = {
   summary: '寻找高数资料',
   searches: [
@@ -60,7 +87,7 @@ describe('SearchSession', () => {
     const updates: unknown[] = [];
     const session = new SearchSession({
       planner,
-      cc98,
+      source: asPageSource(cc98.searchTopics),
       sleep: async () => undefined,
       now: (() => { let value = 0; return () => value++; })(),
       onUpdate: (snapshot) => updates.push(snapshot),
@@ -93,7 +120,7 @@ describe('SearchSession', () => {
     };
     const session = new SearchSession({
       planner,
-      cc98: { searchTopics: vi.fn(async () => []) },
+      source: asPageSource(vi.fn(async () => [])),
       sleep: async () => undefined,
       now: (() => { let value = 0; return () => value++; })(),
     });
@@ -114,7 +141,7 @@ describe('SearchSession', () => {
     };
     const session = new SearchSession({
       planner,
-      cc98: { searchTopics: vi.fn(async (_query, from) => Array.from({ length: 20 }, (_, i) => ({ id: `${from}-${i}`, title: '高数' }))) },
+      source: asPageSource(vi.fn(async (_query, from) => Array.from({ length: 20 }, (_, i) => ({ id: `${from}-${i}`, title: '高数' })))),
       sleep: async () => undefined,
       now: () => 0,
     });
@@ -134,7 +161,7 @@ describe('SearchSession', () => {
         planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
-      cc98: { searchTopics: vi.fn(async (query) => [{ id: query, title: query }]) },
+      source: asPageSource(vi.fn(async (query) => [{ id: query, title: query }])),
       sleep: async (milliseconds) => { sleeps.push(milliseconds); },
       now: () => 0,
     });
@@ -155,7 +182,7 @@ describe('SearchSession', () => {
         planFeedback: vi.fn(),
         planBlindExpansion: vi.fn(),
       },
-      cc98: { searchTopics },
+      source: asPageSource(searchTopics),
       sleep: async () => { session.stop(); },
       now: () => 0,
     });
@@ -178,7 +205,7 @@ describe('SearchSession', () => {
         planFeedback: vi.fn(),
         planBlindExpansion: vi.fn(),
       },
-      cc98: { searchTopics: vi.fn() },
+      source: asPageSource(vi.fn()),
       now: () => 0,
     });
 
@@ -198,7 +225,7 @@ describe('SearchSession', () => {
         planFeedback: vi.fn(),
         planBlindExpansion: vi.fn(),
       },
-      cc98: { searchTopics: vi.fn(async () => Array.from({ length: 20 }, (_, index) => ({ id: String(index), title: '高数' }))) },
+      source: asPageSource(vi.fn(async () => Array.from({ length: 20 }, (_, index) => ({ id: String(index), title: '高数' })))),
       sleep: async () => undefined,
       now: () => (++clockReads <= 3 ? 0 : 1000),
     });
@@ -224,7 +251,7 @@ describe('SearchSession', () => {
           return { ...initialPlan, searches: [{ query: '微积分', purpose: '' }] };
         }),
       },
-      cc98: { searchTopics },
+      source: asPageSource(searchTopics),
       sleep: async () => undefined,
       now: () => clock,
     });
@@ -243,7 +270,7 @@ describe('SearchSession', () => {
         },
         planBlindExpansion: vi.fn(),
       },
-      cc98: { searchTopics: vi.fn(async () => [{ id: 'kept', title: '高数资料' }]) },
+      source: asPageSource(vi.fn(async () => [{ id: 'kept', title: '高数资料' }])),
       sleep: async () => undefined,
       now: () => 0,
     });
@@ -271,12 +298,10 @@ describe('SearchSession', () => {
         },
         planBlindExpansion: vi.fn(),
       },
-      cc98: {
-        searchTopics: vi.fn(async () => [
-          { id: 'recent', title: '微积分期末资料', time: '2025-01-01' },
-          { id: 'old', title: '微积分期末资料', time: '2012-01-01' },
-        ]),
-      },
+      source: asPageSource(vi.fn(async () => [
+        { id: 'recent', title: '微积分期末资料', time: '2025-01-01' },
+        { id: 'old', title: '微积分期末资料', time: '2012-01-01' },
+      ])),
       sleep: async () => undefined,
       now: () => 0,
     });
@@ -296,12 +321,10 @@ describe('SearchSession', () => {
         planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
-      cc98: {
-        searchTopics: vi.fn(async () => [
-          { id: 'recent', title: '微积分资料', time: '2025-01-01' },
-          { id: 'old', title: '微积分资料', time: '2012-01-01' },
-        ]),
-      },
+      source: asPageSource(vi.fn(async () => [
+        { id: 'recent', title: '微积分资料', time: '2025-01-01' },
+        { id: 'old', title: '微积分资料', time: '2012-01-01' },
+      ])),
       sleep: async () => undefined,
       now: () => 0,
     });
@@ -325,7 +348,7 @@ describe('SearchSession', () => {
         planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
-      cc98: { searchTopics },
+      source: asPageSource(searchTopics),
       sleep: async () => undefined,
       now: () => 0,
     });
@@ -350,7 +373,7 @@ describe('SearchSession', () => {
     };
     const session = new SearchSession({
       planner,
-      cc98: { searchTopics: vi.fn(async () => [{ id: 'old', title: '微积分资料', time: '2012-01-01' }]) },
+      source: asPageSource(vi.fn(async () => [{ id: 'old', title: '微积分资料', time: '2012-01-01' }])),
       sleep: async () => undefined,
       now: () => 0,
     });
@@ -367,7 +390,7 @@ describe('SearchSession', () => {
   it('exposes a Chinese status for every bounded stop condition', () => {
     const reasons: SearchStopReason[] = [
       'model_stop', 'no_new_candidates', 'no_new_searches', 'no_results', 'budget_exhausted',
-      'request_limit', 'user_stopped', 'replaced', 'not_logged_in', 'cc98_limited', 'model_timeout', 'failed',
+      'request_limit', 'user_stopped', 'replaced', 'not_logged_in', 'rate_limited', 'model_timeout', 'failed',
     ];
 
     for (const reason of reasons) expect(stopReasonText(reason)).toMatch(/[\u3400-\u9fff]/u);

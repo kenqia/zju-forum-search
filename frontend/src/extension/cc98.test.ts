@@ -34,7 +34,7 @@ describe('CC98 browser adapter', () => {
     const client = new Cc98Client('Bearer fake-cc98-token', async () => new Response('{}', { status: 401 }));
 
     await expect(client.searchTopics('高数', 0, 20)).rejects.toMatchObject({
-      reason: 'not_logged_in',
+      code: 'not_logged_in',
       message: '请先登录 CC98，然后刷新页面再试。',
     });
   });

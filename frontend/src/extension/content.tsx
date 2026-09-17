@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import panelCss from './panel.css?inline';
 
-import { Cc98Client, readCc98AccessToken } from './cc98';
+import { Cc98SourceSession, readCc98AccessToken } from './cc98';
 import type { FeedbackInput } from './planner';
 import { SearchSession, SearchSessionError, type SearchPlanner, type SearchSnapshot } from './search-session';
 import { DEFAULT_SETTINGS, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
@@ -187,7 +187,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
     }
     const nextSession = new SearchSession({
       planner: createBackgroundPlanner(runtime),
-      cc98: new Cc98Client(token),
+      source: new Cc98SourceSession(token),
       onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
     });
     controller.session = nextSession;
