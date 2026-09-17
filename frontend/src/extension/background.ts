@@ -6,6 +6,7 @@ import {
   MODEL_TIMEOUT_MS,
   type ExtensionRequest,
   type ExtensionSettings,
+  type SourceCapabilities,
 } from './types';
 
 export interface SettingsStorage {
@@ -41,6 +42,15 @@ interface ChromeApi {
   };
 }
 
+function isSourceCapabilities(value: unknown): value is SourceCapabilities {
+  if (!value || typeof value !== 'object') return false;
+  const capabilities = value as Record<string, unknown>;
+  return typeof capabilities.searchSurface === 'string'
+    && ['title', 'fulltext', 'mixed'].includes(capabilities.searchSurface)
+    && typeof capabilities.querySyntax === 'string'
+    && ['plain-keyword', 'boolean'].includes(capabilities.querySyntax);
+}
+
 function isExtensionRequest(message: unknown): message is ExtensionRequest {
   if (!message || typeof message !== 'object') return false;
   const value = message as Record<string, unknown>;
@@ -48,10 +58,10 @@ function isExtensionRequest(message: unknown): message is ExtensionRequest {
   if (value.type === 'settings:save') return Boolean(value.settings) && typeof value.settings === 'object';
   if (value.type === 'planner:cancel') return typeof value.requestId === 'string' && Boolean(value.requestId);
   if (value.type === 'planner:first' || value.type === 'planner:blind') {
-    return typeof value.requestId === 'string' && Boolean(value.requestId) && typeof value.query === 'string';
+    return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && typeof value.query === 'string';
   }
   if (value.type === 'planner:feedback') {
-    return typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object';
+    return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object';
   }
   return false;
 }
@@ -162,7 +172,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         }
 
         const settings = validateSettings({ ...DEFAULT_SETTINGS, ...await dependencies.storage.get() });
-        const planner = new PlannerClient(transport, settings);
+        const planner = new PlannerClient(transport, settings, request.capabilities);
         if (type === 'planner:first') {
           sendResponse({ ok: true, plan: await planner.planFirstRound(request.query, plannerController!.signal) });
         } else if (type === 'planner:blind') {

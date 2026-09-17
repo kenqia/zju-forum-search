@@ -30,6 +30,18 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
 }
 
 describe('background message boundary', () => {
+  it.each([undefined, { searchSurface: 'unsupported', querySyntax: 'plain-keyword' },
+    { searchSurface: ['title'], querySyntax: 'boolean' }, { searchSurface: 'title', querySyntax: 'sql' },
+  ])('rejects invalid capabilities before calling the model: %j', (capabilities) => {
+    const dependencies: BackgroundDependencies = { storage: { get: vi.fn(), set: vi.fn() }, requestPermission: vi.fn(), fetch: vi.fn() };
+    const handler = createMessageHandler(dependencies);
+    for (const type of ['planner:first', 'planner:blind', 'planner:feedback']) {
+      expect(handler({ type, requestId: 'invalid', query: '测试', input: {}, capabilities }, vi.fn())).toBe(false);
+    }
+    expect(dependencies.fetch).not.toHaveBeenCalled();
+    expect(dependencies.storage.get).not.toHaveBeenCalled();
+  });
+
   it('requests only the configured model host before persisting settings', async () => {
     const { dependencies, send } = harness();
     const settings = {
@@ -80,12 +92,13 @@ describe('background message boundary', () => {
       },
     });
 
-    const response = await send({ type: 'planner:first', requestId: 'request-1', query: '找高数资料', body: '不得转发' });
+    const response = await send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' }, requestId: 'request-1', query: '找高数资料', body: '不得转发' });
 
     expect(response).toMatchObject({ ok: true, plan: { searches: [{ query: '高数' }] } });
     expect(dependencies.fetch).toHaveBeenCalledOnce();
     const [url, init] = (dependencies.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe('https://models.example.com/v1/chat/completions');
+    expect(JSON.parse(String(init.body)).messages[0].content).toContain('仅匹配原生标题');
     expect((init as RequestInit).headers).toEqual({
       Authorization: 'Bearer fake-key',
       'Content-Type': 'application/json',
@@ -107,12 +120,13 @@ describe('background message boundary', () => {
     });
 
     await send({
-      type: 'planner:feedback',
+      type: 'planner:feedback', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword' },
       requestId: 'feedback-1',
       input: { query: '高数', executedSearches: [], newCandidates: [], round: 1 },
     });
 
     const [, init] = (dependencies.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(String(init.body)).messages[0].content).toContain('匹配全文');
     expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
       enable_thinking: false,
       max_completion_tokens: 1200,
@@ -128,7 +142,7 @@ describe('background message boundary', () => {
         })),
       });
 
-      const pending = send({ type: 'planner:first', requestId: 'request-timeout', query: '高数' });
+      const pending = send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' }, requestId: 'request-timeout', query: '高数' });
       await vi.advanceTimersByTimeAsync(20_000);
 
       await expect(pending).resolves.toEqual({
@@ -146,7 +160,7 @@ describe('background message boundary', () => {
       fetch: vi.fn(async () => new Response('{"choices":[]}', { status: 200 })),
     });
 
-    await expect(send({ type: 'planner:first', requestId: 'request-2', query: '高数' })).resolves.toEqual({
+    await expect(send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' }, requestId: 'request-2', query: '高数' })).resolves.toEqual({
       ok: false,
       error: '模型没有返回文本内容',
       code: 'planner_failed',
@@ -165,7 +179,7 @@ describe('background message boundary', () => {
       }),
     });
 
-    const pending = send({ type: 'planner:first', requestId: 'request-cancel', query: '高数' });
+    const pending = send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' }, requestId: 'request-cancel', query: '高数' });
     await send({ type: 'planner:cancel', requestId: 'request-cancel' });
 
     expect(observedSignal?.aborted).toBe(true);

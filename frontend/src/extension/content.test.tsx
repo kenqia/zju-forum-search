@@ -11,6 +11,23 @@ import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } fr
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('extension content UI', () => {
+  it('forwards source capabilities for first, blind, and feedback requests', async () => {
+    const capabilities = { searchSurface: 'fulltext', querySyntax: 'plain-keyword' } as const;
+    const requests: ExtensionRequest[] = [];
+    const runtime: RuntimeMessenger = {
+      send: async <Request extends ExtensionRequest>(message: Request) => {
+        requests.push(message);
+        return { ok: false, error: 'test response' };
+      },
+    };
+    const planner = createBackgroundPlanner(runtime, capabilities);
+    await expect(planner.planFirstRound('测试')).rejects.toThrow('test response');
+    await expect(planner.planBlindExpansion('测试')).rejects.toThrow('test response');
+    await expect(planner.planFeedback({ query: '测试', round: 1, executedSearches: [], newCandidates: [] })).rejects.toThrow('test response');
+    expect(requests.map((request) => request.type)).toEqual(['planner:first', 'planner:blind', 'planner:feedback']);
+    for (const request of requests) expect(request).toMatchObject({ capabilities });
+  });
+
   it('labels zero-hit searches without showing learned-term audit metadata', async () => {
     const container = document.createElement('div');
     const root = createRoot(container);
@@ -46,7 +63,7 @@ describe('extension content UI', () => {
       } as ExtensionResponseFor<Request>),
     };
 
-    await expect(createBackgroundPlanner(runtime).planFeedback({
+    await expect(createBackgroundPlanner(runtime, { searchSurface: 'title', querySyntax: 'plain-keyword' }).planFeedback({
       query: '高数', executedSearches: [], newCandidates: [], round: 1,
     })).rejects.toMatchObject({
       reason: 'model_timeout',

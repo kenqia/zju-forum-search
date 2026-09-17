@@ -1,5 +1,5 @@
 import type { ModelQueryPlan, RetrievedCandidate, TopicCandidate } from './types';
-import { folded, normalizeText } from './planner';
+import { folded, normalizeText } from './text';
 import { firstObservedRound } from './retrieval';
 
 function includesExpression(haystack: string, expression: string): boolean {

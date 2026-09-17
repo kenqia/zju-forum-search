@@ -66,10 +66,14 @@ UI → sourceRegistry.resolve(location.href)
 
 ## 2026-09-17 接手审查补记
 
-CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型、SearchBudget 与 core 反馈白名单；#16 的能力提示词、#17–19 仍待实施。详见 [接手审查](../research/search-source-handoff-review.md)。
+CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型、SearchBudget 与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17–19 仍待实施。详见 [接手审查](../research/search-source-handoff-review.md)。
 
 用户已确认继续沿用正文不出域约定。朵朵 `content` 可作为本地展示标题和 RankingDocument.snippet，但必须标记 `titleOrigin: body-derived`，反馈中的 title 为空。没有原生标题时，模型仅能依据查询、检索命中数与其他允许的元数据决定后续搜索，不能从正文学习词汇。#16 的提示词应如实说明这一限制。
 
 #15 的排序实现对每份 document 独立匹配，再取概念命中的并集，不把不同片段首尾拼成新词。时间使用第一份能解析日期的 document；展示元数据保留首次候选，首次轮次、不同查询数和最佳位次均由 observations 计算。排序键只存在 ranking 私有结构中，UI 结果保留现有展示字段。
 
 朵朵公开前端版本与指纹、公钥来源、OAEP hash、AES key/IV/tag 编码及合成数据离线复现已补入调研记录。登录后字段和风控语义仍须用户本人会话验收，不凭未登录空结果推定已验证。
+
+## #16 实施补记
+
+首轮、盲扩展与反馈规划使用同一份 session capabilities，经 content 消息传入后台 `PlannerClient`。提示词按 searchSurface 与 querySyntax 生成，不依赖站点 ID。`feedback-payload.ts` 在 core 选择候选白名单字段，在模型请求序列化时再次限制字段和 4000 UTF-8 字节，包括当前日期。`text.ts` 承担文本归一化，adapter 和 ranking 不再为此依赖 planner。

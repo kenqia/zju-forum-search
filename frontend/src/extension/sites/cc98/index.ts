@@ -9,7 +9,7 @@ import {
   type SearchSourceSession,
   type SourceCapabilities,
 } from '../../types';
-import { normalizeText } from '../../planner';
+import { normalizeText } from '../../text';
 
 const PAGE_SIZE = 20;
 

@@ -5,7 +5,7 @@ import panelCss from './panel.css?inline';
 import { sourceRegistry } from './source-registry';
 import type { FeedbackInput } from './planner';
 import { SearchSession, SearchSessionError, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { SourceError, DEFAULT_SETTINGS, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
+import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
 
 export interface RuntimeMessenger {
   send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
@@ -35,7 +35,7 @@ function responseError(response: { ok: false; error: string; code?: ExtensionFai
 }
 
 class BackgroundPlanner implements SearchPlanner {
-  constructor(private readonly runtime: RuntimeMessenger) {}
+  constructor(private readonly runtime: RuntimeMessenger, private readonly capabilities: SourceCapabilities) {}
   private withCancellation<T>(response: Promise<T>, requestId: string, signal?: AbortSignal): Promise<T> {
     if (!signal) return response;
     return new Promise<T>((resolve, reject) => {
@@ -53,9 +53,7 @@ class BackgroundPlanner implements SearchPlanner {
   private async requestPlan(type: 'planner:first' | 'planner:blind', query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const request = type === 'planner:first'
-      ? { type, requestId, query } as const
-      : { type, requestId, query } as const;
+    const request = { type, requestId, query, capabilities: this.capabilities };
     const response = await this.withCancellation(this.runtime.send(request), requestId, signal);
     if (!response.ok) throw responseError(response, '模型调用超过 20 秒，未开始 CC98 检索。');
     return response.plan;
@@ -63,7 +61,7 @@ class BackgroundPlanner implements SearchPlanner {
   private async requestFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const response = await this.withCancellation(this.runtime.send({ type: 'planner:feedback', requestId, input }), requestId, signal);
+    const response = await this.withCancellation(this.runtime.send({ type: 'planner:feedback', requestId, input, capabilities: this.capabilities }), requestId, signal);
     if (!response.ok) throw responseError(response, '反馈模型调用超过 20 秒，已保留当前结果。');
     return response.feedback;
   }
@@ -78,8 +76,8 @@ class BackgroundPlanner implements SearchPlanner {
   }
 }
 
-export function createBackgroundPlanner(runtime: RuntimeMessenger): SearchPlanner {
-  return new BackgroundPlanner(runtime);
+export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities: SourceCapabilities): SearchPlanner {
+  return new BackgroundPlanner(runtime, capabilities);
 }
 
 const EMPTY_SNAPSHOT: SearchSnapshot = {
@@ -186,7 +184,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
       const source = await adapter.createSession({ url: location.href });
       if (controller.runId !== currentRun) return;
       const nextSession = new SearchSession({
-        planner: createBackgroundPlanner(runtime),
+        planner: createBackgroundPlanner(runtime, source.capabilities),
         source,
         onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
       });

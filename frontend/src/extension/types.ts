@@ -156,9 +156,9 @@ export interface FeedbackRequestInput {
 export type ExtensionRequest =
   | { type: 'settings:get' }
   | { type: 'settings:save'; settings: Partial<ExtensionSettings> }
-  | { type: 'planner:first'; requestId: string; query: string }
-  | { type: 'planner:blind'; requestId: string; query: string }
-  | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput }
+  | { type: 'planner:first'; requestId: string; query: string; capabilities: SourceCapabilities }
+  | { type: 'planner:blind'; requestId: string; query: string; capabilities: SourceCapabilities }
+  | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput; capabilities: SourceCapabilities }
   | { type: 'planner:cancel'; requestId: string };
 
 export type ExtensionFailureCode = 'planner_failed' | 'model_timeout' | 'model_cancelled';

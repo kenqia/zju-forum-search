@@ -1,8 +1,9 @@
 import type { FeedbackInput } from './planner';
-import { folded, hasExplicitTimeConstraint, normalizeText } from './planner';
+import { hasExplicitTimeConstraint } from './planner';
+import { folded, normalizeText } from './text';
 import { rankAndFilterCandidates } from './ranking';
 import { firstObservedRound, mergeHits } from './retrieval';
-import { createFeedbackInput } from './feedback-evidence';
+import { createFeedbackInput } from './feedback-payload';
 import { SearchBudget } from './search-budget';
 import {
   SourceError,
