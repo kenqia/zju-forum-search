@@ -49,3 +49,5 @@ core 将候选对象、每次召回观察与排序文档分开保存。同一帖
 planner 的首轮、盲扩展和反馈提示词由 `SourceCapabilities` 生成。CC98 使用标题匹配与普通关键词；朵朵预定使用全文匹配与普通关键词，adapter 尚未接入。全文匹配不改变正文不出域规则，反馈缺少原生标题时模型只能依据查询、命中数与允许的元数据继续规划。
 
 `frontend/src/extension/feedback-payload.ts` 集中维护反馈白名单、标题来源检查及条数和字节上限；`text.ts` 提供归一化与大小写折叠函数。搜索源能力通过扩展消息传给后台 planner，后台只接受已声明的能力枚举。
+
+新增 adapter 时，在 `source-registry.ts` 注册，并将其 `pageMatches` 和 `apiHosts` 分别登记到 manifest 的 `content_scripts.matches` 与 `host_permissions`。运行 `cd frontend && npm test -- src/extension/source-manifest.test.ts` 检查所有已注册源的权限是否齐全。测试按声明的模式字符串检查包含关系，允许 manifest 保留额外的模型端点权限；不解析更宽通配符是否等价覆盖。

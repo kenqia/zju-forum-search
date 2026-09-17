@@ -66,7 +66,7 @@ UI → sourceRegistry.resolve(location.href)
 
 ## 2026-09-17 接手审查补记
 
-CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型、SearchBudget 与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17–19 仍待实施。详见 [接手审查](../research/search-source-handoff-review.md)。
+CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型、SearchBudget 与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17 已落地 registry 与 manifest 契约测试，#18–19 仍待实施。详见 [接手审查](../research/search-source-handoff-review.md)。
 
 用户已确认继续沿用正文不出域约定。朵朵 `content` 可作为本地展示标题和 RankingDocument.snippet，但必须标记 `titleOrigin: body-derived`，反馈中的 title 为空。没有原生标题时，模型仅能依据查询、检索命中数与其他允许的元数据决定后续搜索，不能从正文学习词汇。#16 的提示词应如实说明这一限制。
 
