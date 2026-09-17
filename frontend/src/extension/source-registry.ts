@@ -1,7 +1,8 @@
+import { duoAdapter } from './sites/duo';
 import { cc98Adapter } from './sites/cc98';
 import type { SearchSourceAdapter } from './types';
 
-const adapters: readonly SearchSourceAdapter[] = [cc98Adapter];
+const adapters: readonly SearchSourceAdapter[] = [cc98Adapter, duoAdapter];
 
 export const sourceRegistry = {
   adapters,

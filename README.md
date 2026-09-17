@@ -1,6 +1,6 @@
 # ZJU Forum Search
 
-这是一个运行在 `www.cc98.org` 上的 Manifest V3 浏览器扩展。用户输入自然语言后，扩展让 OpenAI 兼容模型规划检索词，再顺序调用 CC98 主题搜索接口。候选合并与重排都在浏览器中完成。
+这是一个运行在 CC98 和朵朵校友圈页面上的 Manifest V3 浏览器扩展。用户输入自然语言后，扩展让 OpenAI 兼容模型规划检索词，再调用当前站点的搜索接口。候选合并与重排都在浏览器中完成。朵朵已接入，真实登录会话仍待手动验收。
 
 ## 构建和加载
 
@@ -11,9 +11,9 @@ npm test
 npm run build
 ```
 
-构建产物位于 `frontend/dist/`。在 Edge 打开 `edge://extensions`，启用“开发人员模式”，点击“加载解压缩的扩展”，然后选择该目录。登录 `https://www.cc98.org/` 并刷新页面，右下角会出现 `98` 悬浮球。
+构建产物位于 `frontend/dist/`。在 Edge 打开 `edge://extensions`，启用“开发人员模式”，点击“加载解压缩的扩展”，然后选择该目录。在 `https://www.cc98.org/` 或 `https://www.duoduo.link/` 登录并刷新页面，右下角会出现“搜”悬浮球。
 
-扩展没有单独的 CC98 登录入口。它只读取当前 CC98 页面的短期登录态。遇到未登录或登录过期时，先在 CC98 完成登录，再刷新页面。
+扩展复用当前站点登录态，没有账号输入入口。CC98 使用原站短期授权，朵朵使用原站微信扫码登录后的授权。遇到未登录或登录过期时，先在原站完成登录，再刷新页面。
 
 ## 模型设置
 
@@ -22,15 +22,15 @@ npm run build
 - OpenAI 兼容 base URL，例如 `https://example.com/v1`
 - API key
 - 模型名称
-- CC98 检索时长，范围为 10 到 300 秒
+- 站点检索时长，范围为 10 到 300 秒
 
-保存时，浏览器只申请 base URL 所在主机的访问权限。API key 保存在 `chrome.storage.local`，该存储并不加密。service worker 用 key 请求 `{base URL}/chat/completions`，但不会把它回传给 content script。key 不会写入 CC98 页面的 light DOM、日志或仓库。
+保存时，浏览器只申请 base URL 所在主机的访问权限。API key 保存在 `chrome.storage.local`，该存储并不加密。service worker 用 key 请求 `{base URL}/chat/completions`，但不会把它回传给 content script。key 不会写入站点页面的 light DOM、日志或仓库。
 
 ## 搜索边界
 
-每轮 CC98 请求间隔 2 秒，每页 20 条，一次搜索最多发出 30 次 CC98 请求。用户设置的时长只计算 CC98 请求耗时和 2 秒请求间隔，不计算模型等待。达到该时长、请求上限或其他停止条件后，面板保留已有结果并说明原因。关闭面板不会停止搜索；“停止并查看结果”会终止当前搜索；新查询会替换旧查询。
+CC98 请求间隔为 2 秒，朵朵初始间隔为 500ms；两者每页 20 条，一次搜索最多调用 30 次。朵朵的间隔不是实测安全阈值，遇到验证码或限流会停止。用户设置的时长只计算站点请求耗时和强制间隔，不计算模型等待。达到该时长、请求上限或其他停止条件后，面板保留已有结果并说明原因。关闭面板不会停止搜索；“停止并查看结果”会终止当前搜索；新查询会替换旧查询。
 
-首轮模型调用会发送用户查询和浏览器当前日期。反馈轮还会发送本轮新增候选的标题、作者、发布时间、板块和回复数，并对标题长度和整轮负载设上限。所有模型调用都关闭思考模式，将最大输出限制为 1200 tokens，并通过 `AbortController` 在 20 秒后终止。反馈超时会保留已有结果并显示准确原因。主题正文、回帖、CC98 认证信息和用户身份不会发送给模型。
+首轮模型调用会发送用户查询和浏览器当前日期。反馈轮还会发送本轮新增候选的标题、作者、发布时间、板块和回复数，并对标题长度和整轮负载设上限。所有模型调用都关闭思考模式，将最大输出限制为 1200 tokens，并通过 `AbortController` 在 20 秒后终止。反馈超时会保留已有结果并显示准确原因。主题正文、回帖、站点认证信息和用户身份不会发送给模型。
 
 扩展会在本地规范化模型计划：缺失的说明字段和空约束使用默认值，字符串形式的检索词转换为标准结构，空的必须概念会被丢弃。规范化后仍没有可用检索词时，纯单关键词直接按用户原词搜索，并在进度区说明已启用兜底。网络错误和模型超时不会触发原词兜底。
 
@@ -38,7 +38,7 @@ npm run build
 
 ## 搜索源边界
 
-CC98 的认证读取、请求、响应解析和分页位于 `frontend/src/extension/sites/cc98/`。界面通过 `source-registry.ts` 按页面地址选择 adapter，再创建搜索 session；界面不接触论坛 token。当前只注册 CC98，manifest 权限未扩展到其他站点。
+CC98 的认证读取、请求、响应解析和分页位于 `frontend/src/extension/sites/cc98/`。界面通过 `source-registry.ts` 按页面地址选择 adapter，再创建搜索 session；界面不接触论坛 token。朵朵 adapter 位于 `frontend/src/extension/sites/duo/`，负责 `ddtk`、加密信封、快照分页与响应映射。manifest 已登记两个站点及其 API 主机，后台按 registry 校验消息来源。
 
 计划缓存和“换一组检索词”入口已按 issue #10 的验收反馈撤回，再次提交查询会重新搜索。SearchSource 接手审查及朵朵接入前的未决项见 [审查记录](docs/research/search-source-handoff-review.md)。
 
@@ -46,8 +46,20 @@ core 将候选对象、每次召回观察与排序文档分开保存。同一帖
 
 反馈证据在 core 内构造，进入 planner 前已去除 ID、URL、片段和召回记录，并限制为最多 160 条、4000 UTF-8 字节。实际模型请求再次按白名单和字节上限序列化。正文派生标题只在本地显示，反馈标题为空；CC98 的原生标题反馈行为不变。
 
-planner 的首轮、盲扩展和反馈提示词由 `SourceCapabilities` 生成。CC98 使用标题匹配与普通关键词；朵朵预定使用全文匹配与普通关键词，adapter 尚未接入。全文匹配不改变正文不出域规则，反馈缺少原生标题时模型只能依据查询、命中数与允许的元数据继续规划。
+planner 的首轮、盲扩展和反馈提示词由 `SourceCapabilities` 生成。CC98 使用标题匹配与普通关键词；朵朵使用全文匹配与普通关键词，这一能力仍需登录后对照原站验证。全文匹配不改变正文不出域规则，反馈缺少原生标题时模型只能依据查询、命中数与允许的元数据继续规划。
 
 `frontend/src/extension/feedback-payload.ts` 集中维护反馈白名单、标题来源检查及条数和字节上限；`text.ts` 提供归一化与大小写折叠函数。搜索源能力通过扩展消息传给后台 planner，后台只接受已声明的能力枚举。
 
 新增 adapter 时，在 `source-registry.ts` 注册，并将其 `pageMatches` 和 `apiHosts` 分别登记到 manifest 的 `content_scripts.matches` 与 `host_permissions`。运行 `cd frontend && npm test -- src/extension/source-manifest.test.ts` 检查所有已注册源的权限是否齐全。测试按声明的模式字符串检查包含关系，允许 manifest 保留额外的模型端点权限；不解析更宽通配符是否等价覆盖。
+
+## 朵朵手动验收
+
+```bash
+bash frontend/scripts/issue-18-19-acceptance-wizard.sh
+# 只运行本地检查，不打开浏览器、不进行真人验收：
+bash frontend/scripts/issue-18-19-acceptance-wizard.sh --check-only
+```
+
+向导分 10 阶段，每阶段用 y/N 确认。本人在 Edge 完成登录、搜索、结果跳转与错误提示验收；脚本不读取或保存登录态。无法核实的真实会话项目会列入待验证清单，不会因自动测试通过就视作已验收。
+
+朵朵显示标题由正文截断生成，只供本地展示；模型反馈标题为空。扩展默认省略 `group_id`，不读取用户资料、不硬编码学校编号，也不继承原站的圈层筛选。搜索范围、`ddtk` 与 `duo_session` 的关系、未登录空结果含义、`needCode` 条件及阈值均需本人会话确认。协议与实现取舍见 [API 调研](docs/research/duo-alumni-api-survey.md) 和 [实施记录](docs/experiments/issue-18-19-duo-adapter.md)。

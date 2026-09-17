@@ -186,3 +186,32 @@ describe('background message boundary', () => {
     await expect(pending).resolves.toEqual({ ok: false, error: '模型请求已取消', code: 'model_cancelled' });
   });
 });
+
+
+describe('registered page message senders', () => {
+  it('accepts both registered sources and rejects lookalike or unsupported origins', async () => {
+    const addListener = vi.fn();
+    vi.stubGlobal('chrome', {
+      runtime: { onMessage: { addListener } },
+      storage: { local: { get: (_key: string, callback: (value: object) => void) => callback({}) } },
+    });
+    try {
+      vi.resetModules();
+      await import('./background');
+      const listener = addListener.mock.calls[0][0];
+      for (const url of ['https://www.cc98.org/topic/1', 'https://www.duoduo.link/a/1']) {
+        const reply = vi.fn();
+        expect(listener({ type: 'settings:get' }, { url }, reply)).toBe(true);
+        await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(expect.objectContaining({ ok: true })));
+      }
+      for (const url of [undefined, 'http://www.duoduo.link/', 'https://www.duoduo.link.evil.test/', 'https://example.test/']) {
+        const reply = vi.fn();
+        expect(listener({ type: 'settings:get' }, { url }, reply)).toBe(false);
+        expect(reply).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+});

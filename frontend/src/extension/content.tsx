@@ -55,7 +55,7 @@ class BackgroundPlanner implements SearchPlanner {
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
     const request = { type, requestId, query, capabilities: this.capabilities };
     const response = await this.withCancellation(this.runtime.send(request), requestId, signal);
-    if (!response.ok) throw responseError(response, '模型调用超过 20 秒，未开始 CC98 检索。');
+    if (!response.ok) throw responseError(response, '模型调用超过 20 秒，未开始检索。');
     return response.plan;
   }
   private async requestFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
@@ -122,7 +122,7 @@ function SettingsPanel({ runtime, settings, onSettings }: {
       <label>模型名称
         <input value={draft.llmModel} onChange={(event) => setDraft({ ...draft, llmModel: event.target.value })} placeholder="model-name" required />
       </label>
-      <label>CC98 检索时长（秒）
+      <label>站点检索时长（秒）
         <input type="number" min="10" max="300" value={draft.searchBudgetSeconds} onChange={(event) => setDraft({ ...draft, searchBudgetSeconds: Number(event.target.value) })} required />
       </label>
       <p className="hint">模型每次最多等待 20 秒，不占用这段检索时长。</p>
@@ -238,11 +238,11 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
 
   return <>
     <style>{panelCss}</style>
-    <button className="orb" type="button" aria-label="打开 CC98 自然语言搜索" onClick={() => setOpen(true)}>
-      <span className="orb-mark">98</span><span className="orb-dot" />
+    <button className="orb" type="button" aria-label="打开自然语言搜索" onClick={() => setOpen(true)}>
+      <span className="orb-mark">搜</span><span className="orb-dot" />
     </button>
-    <aside className={`drawer${open ? ' open' : ''}`} aria-label="CC98 自然语言搜索" aria-hidden={!open}>
-      <div className="drawer-head"><div><p className="kicker">CC98 SEARCH</p><h1>找到真正相关的讨论</h1><p className="subtitle">模型规划检索词，CC98 返回候选，浏览器本地重排。</p></div><button className="close" type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button></div>
+    <aside className={`drawer${open ? ' open' : ''}`} aria-label="社区自然语言搜索" aria-hidden={!open}>
+      <div className="drawer-head"><div><p className="kicker">CAMPUS SEARCH</p><h1>找到真正相关的讨论</h1><p className="subtitle">模型规划检索词，当前站点返回候选，浏览器本地重排。</p></div><button className="close" type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button></div>
       <nav className="tabs" aria-label="功能切换">
         <button className={`tab${tab === 'search' ? ' active' : ''}`} data-tab="search" type="button" onClick={() => setTab('search')}>搜索</button>
         <button className={`tab${tab === 'settings' ? ' active' : ''}`} data-tab="settings" type="button" onClick={() => setTab('settings')}>模型设置</button>
@@ -250,14 +250,14 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
       {tab === 'search'
         ? <SearchPanel runtime={runtime} settings={settings} state={searchState} onState={(patch) => setSearchState((current) => ({ ...current, ...patch }))} controller={searchController.current} />
         : <SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} />}
-      <p className="privacy">反馈轮只会向模型发送标题、作者、时间、板块和回复数。正文、回帖和 CC98 登录信息不会离开浏览器。</p>
+      <p className="privacy">反馈轮只会向模型发送原生标题、作者、时间、板块和回复数。正文派生标题仅在本地显示。正文、回帖和站点登录信息不会发送给模型。</p>
     </aside>
   </>;
 }
 
 export function mountExtension(targetDocument: Document, runtime: RuntimeMessenger, mode: ShadowRootMode = 'closed') {
   const existing = targetDocument.getElementById('zju-forum-search-extension');
-  if (existing) throw new Error('CC98 自然语言搜索扩展已经加载');
+  if (existing) throw new Error('社区自然语言搜索扩展已经加载');
   const host = targetDocument.createElement('div');
   host.id = 'zju-forum-search-extension';
   const shadowRoot = host.attachShadow({ mode });

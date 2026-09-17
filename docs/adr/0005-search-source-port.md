@@ -66,7 +66,7 @@ UI → sourceRegistry.resolve(location.href)
 
 ## 2026-09-17 接手审查补记
 
-CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型、SearchBudget 与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17 已落地 registry 与 manifest 契约测试，#18–19 仍待实施。详见 [接手审查](../research/search-source-handoff-review.md)。
+CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型、SearchBudget 与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17 已落地 registry 与 manifest 契约测试，#18 adapter 与 #19 向导已实现，真实会话验收待完成。详见 [接手审查](../research/search-source-handoff-review.md)。
 
 用户已确认继续沿用正文不出域约定。朵朵 `content` 可作为本地展示标题和 RankingDocument.snippet，但必须标记 `titleOrigin: body-derived`，反馈中的 title 为空。没有原生标题时，模型仅能依据查询、检索命中数与其他允许的元数据决定后续搜索，不能从正文学习词汇。#16 的提示词应如实说明这一限制。
 
@@ -77,3 +77,15 @@ CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候
 ## #16 实施补记
 
 首轮、盲扩展与反馈规划使用同一份 session capabilities，经 content 消息传入后台 `PlannerClient`。提示词按 searchSurface 与 querySyntax 生成，不依赖站点 ID。`feedback-payload.ts` 在 core 选择候选白名单字段，在模型请求序列化时再次限制字段和 4000 UTF-8 字节，包括当前日期。`text.ts` 承担文本归一化，adapter 和 ranking 不再为此依赖 planner。
+
+## #18 / #19 实施补记
+
+朵朵通过原有 SearchSourceSession 端口接入，SearchSession、ranking、planner 文件零修改。AES-GCM/RSA-OAEP 信封、认证、分页和字段映射均在 `sites/duo/`。显示标题标记为 body-derived，正文片段只参与本地排序。
+
+接入暴露了应用入口的遗留耦合：background 只接受 CC98 sender URL，界面也固定显示 CC98。后台现改为复用 registry 校验来源，界面改用通用文案。这超出了 #18“diff 只在 adapter、registry、manifest”的字面范围，但没有改变搜索核心或增加按 source ID 分支。仅改 manifest 会导致朵朵页面无法调用模型，因此保留这两处必要入口修复及对应测试。
+
+公开客户端在关闭圈层筛选时省略 group_id；用户圈层来自未持久化的用户资料。扩展不读取用户对象或增加用户资料请求，默认省略 group_id。adapter session 支持显式传入已知 groupId，但当前界面不提供圈层选择，也不默认使用 4。此行为不等同于原站的个人圈层搜索，真实范围列入向导待验证项。
+
+`issue-18-19-acceptance-wizard.sh` 负责本人会话验收，不读取或保存凭据，未决项可保留为待验证。500ms 是 #18 指定的初始请求间隔，不是已验证的限流阈值。
+
+回滚可 revert 本次实现提交，恢复原 registry、manifest 与页面入口；没有迁移浏览器存储或修改已有认证值。

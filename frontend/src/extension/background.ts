@@ -1,3 +1,4 @@
+import { sourceRegistry } from './source-registry';
 import { PlannerClient, PlannerError, type FeedbackInput, type PlannerTransport } from './planner';
 import { chatCompletionsUrl, modelHostPermission, normalizeSettings, validateSettings } from './settings';
 import {
@@ -218,7 +219,7 @@ if (chromeApi) {
   const handler = createMessageHandler(browserDependencies(chromeApi));
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const senderUrl = (sender as { url?: unknown } | undefined)?.url;
-    if (typeof senderUrl !== 'string' || !senderUrl.startsWith('https://www.cc98.org/')) return false;
+    if (typeof senderUrl !== 'string' || !sourceRegistry.resolve(senderUrl)) return false;
     return handler(message, sendResponse);
   });
 }

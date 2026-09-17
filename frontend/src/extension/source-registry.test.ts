@@ -16,7 +16,10 @@ describe('source registry', () => {
     const session = await adapter!.createSession({ url: 'https://www.cc98.org/' });
     expect((await session.search('测试', undefined)).hits[0].candidate.url).toBe('https://www.cc98.org/topic/1');
   });
-  it.each(['https://www.cc98.org.evil.test/', 'http://www.cc98.org/', 'https://example.com/', 'invalid'])('ignores unsupported page %s', (url) => {
+  it('resolves Duo pages without reading login material', () => {
+    expect(sourceRegistry.resolve('https://www.duoduo.link/a/123')?.id).toBe('duo');
+  });
+  it.each(['https://www.duoduo.link.evil.test/', 'http://www.duoduo.link/', 'https://www.cc98.org.evil.test/', 'http://www.cc98.org/', 'https://example.com/', 'invalid'])('ignores unsupported page %s', (url) => {
     expect(sourceRegistry.resolve(url)).toBeUndefined();
   });
 });

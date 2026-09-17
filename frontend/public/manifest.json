@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "CC98 自然语言搜索",
+  "name": "浙大社区自然语言搜索",
   "version": "0.1.0",
-  "description": "在 CC98 页面内用自然语言迭代检索主题帖。",
+  "description": "在 CC98 和朵朵校友圈页面内用自然语言迭代检索帖子。",
   "permissions": [
     "storage"
   ],
   "host_permissions": [
-    "https://api.cc98.org/*"
+    "https://api.cc98.org/*",
+    "https://api.duoduo.link/*"
   ],
   "optional_host_permissions": [
     "https://*/*",
@@ -19,7 +20,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.cc98.org/*"
+        "https://www.cc98.org/*",
+        "https://www.duoduo.link/*"
       ],
       "js": [
         "content.js"

@@ -85,33 +85,33 @@ describe('extension content UI', () => {
     const root = mounted!.shadowRoot;
 
     expect(document.querySelector('input[type="password"]')).toBeNull();
-    expect(root.querySelector('[aria-label="CC98 自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('true');
+    expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('true');
 
     await act(async () => {
-      (root.querySelector('[aria-label="打开 CC98 自然语言搜索"]') as HTMLButtonElement).click();
+      (root.querySelector('[aria-label="打开自然语言搜索"]') as HTMLButtonElement).click();
     });
-    expect(root.querySelector('[aria-label="CC98 自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('false');
+    expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('false');
 
     await act(async () => {
       (root.querySelector('[data-tab="settings"]') as HTMLButtonElement).click();
     });
     expect(root.querySelector('input[type="password"]')).not.toBeNull();
     expect((root.querySelector('input[type="password"]') as HTMLInputElement).value).toBe('');
-    expect(root.textContent).toContain('CC98 检索时长（秒）');
+    expect(root.textContent).toContain('站点检索时长（秒）');
     expect(root.textContent).toContain('模型每次最多等待 20 秒，不占用这段检索时长。');
     expect(document.querySelector('input[type="password"]')).toBeNull();
 
     await act(async () => {
       (root.querySelector('[aria-label="关闭"]') as HTMLButtonElement).click();
     });
-    expect(root.querySelector('[aria-label="CC98 自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('true');
+    expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('true');
   });
 });
 
 
 describe('registered source UI', () => {
-  it('shows the adapter login prompt without calling the model', async () => {
-    vi.stubGlobal('location', new URL('https://www.cc98.org/'));
+  it.each([['https://www.cc98.org/', '请先登录 CC98，然后刷新页面再试。'], ['https://www.duoduo.link/', '请先登录朵朵校友圈，然后刷新页面再试。']])('shows the login prompt on %s without calling the model', async (url, message) => {
+    vi.stubGlobal('location', new URL(url));
     vi.stubGlobal('localStorage', { getItem: () => null });
     const messages: string[] = [];
     const runtime: RuntimeMessenger = {
@@ -134,7 +134,7 @@ describe('registered source UI', () => {
       await act(async () => {
         root.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       });
-      expect(root.textContent).toContain('请先登录 CC98，然后刷新页面再试。');
+      expect(root.textContent).toContain(message);
       expect(messages).toEqual(['settings:get']);
     } finally {
       vi.unstubAllGlobals();
