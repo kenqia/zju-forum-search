@@ -14,7 +14,7 @@
 
 - 登录：网页端弹窗「微信扫码授权登录」——前端调二维码接口取 `{code, qrCode}`，每 ~1.5s 轮询 `code` 换 `{ddtk}`，写入 user store 后 `refreshUserInfo()`。**未发现浙大统一认证/邮箱/密码入口**。
 - token：`ddtk`，存于 `localStorage["auth-store"]`（JSON，字段 `token`，Pinia `persist.pick:["token"]`）。**非 cookie、非 HttpOnly**，扩展在页面上下文可直接读。请求时以自定义 header `ddtk: <token>` 附加（非 `Authorization: Bearer`）。有效期未查明（前端无过期处理，`isExpired:()=>!1`；失效靠服务端 authCode 触发 `$reset`）。
-- 用户标识：登录后用户对象含 `duo_session`、`openid`、`group_id`、`nickname`、`vip_state` 等；`duo_session` 用于 Clarity identify 与 WebSocket 订阅。未登录调用户接口返回「缺少必要参数:duo_session」——推测 `ddtk` 即 `duo_session` 的值来源，服务端校验侧字段名为 `duo_session`，**待用户会话内验证**。
+- 用户标识：登录后用户对象含 `duo_session`、`openid`、`group_id`、`nickname`、`vip_state` 等；`duo_session` 用于 Clarity identify。2026-09-18 复核纠正：WebSocket 发送的是 `openid` 与 `group_id`，不是 `duo_session`。未登录用户接口曾返回「缺少必要参数:duo_session」，但这不能证明它与 `ddtk` 同值；搜索 adapter 只依赖明确的 `ddtk` header，不依赖两者相等。
 
 ## API 传输协议（adapter 实现的关键差异点）
 
@@ -99,3 +99,49 @@ node frontend/scripts/verify-duo-envelope.mjs
 重新下载同一公开 bundle，版本 SHA-256 与公钥指纹均与上文一致，离线信封互操作脚本通过。`Search` 组件在圈层筛选启用时取 `userInfo.group_id`，未取得时使用 0；关闭筛选时删除请求的 `group_id`。adapter 默认采用省略字段的请求形态，避免猜测用户圈层，不代表已验证服务端的跨圈层权限或召回范围。
 
 `sites/duo/` 已实现同一协议并用独立 Node/OpenSSL 接收端测试。未读取真实登录态、未向搜索 RPC 发请求。真实登录后字段、全文召回、圈层与风控语义仍待 #19 向导验证。
+
+## 2026-09-18 专业验收复核
+
+用户已反馈手动向导整体使用体验良好，技术调查由开发侧接手。本轮不读取真实登录态，不比较真实凭据，不探测风控阈值。
+
+### 公开来源
+
+当前首页仍引用 `index-DtY5Q9_f.js`，使用此前已校验 SHA-256 的完整缓存分析。搜索原站公开代码中的 `auth-store`、`assignToken`、`Search`、`FM`、`RU` 可复核下述行为。
+
+[官方规则页](https://about.duoduo.link/rules) 的 [app.e57592cb.js](https://about.duoduo.link/js/app.e57592cb.js) 通过公开 GET 接口加载规则。本轮读取该 [社区规则接口](https://wxapp-daidai.uboxs.com/timeline/getCommunityRule?type=rule)，响应 SHA-256 为 `c0ba95e28fa39a194e1dcb57097a103505aea51525745e2be697099904ce5267`。检查到的规则没有搜索频率或验证码阈值；不能据此断言其他渠道也没有相关说明。
+
+### 核对结果
+
+| 项目 | 本轮证据与结论 | 仍未确认 |
+| --- | --- | --- |
+| ddtk 与 duo_session | 登录轮询取得 ddtk，login 写入 token，auth-store 只持久化 token，assignToken 把它放进 ddtk header；用户资料中的 duo_session 用于统计标识。adapter 的认证链路与公开实现一致。 | 两者实际值是否相等未知；扩展不需要以此为前提，也不应要求普通用户查看或复制凭据。 |
+| group_id | 搜索页面的“只看本校”开关打开时传入 userInfo.group_id，缺失时为 0；关闭时删除 group_id。扩展省略字段，与关闭开关的请求形态一致。 | 服务器实际召回范围和跨校权限仍不能仅靠前端代码证明。 |
+| 未登录空 entry | 本轮单次未登录搜索完成加密握手并返回空数组，见下节。接口没有返回登录或验证码原因。 | 无法区分没有匹配、登录限制或其他服务端策略，不能把空数组直接解释为鉴权失败。 |
+| needCode 与阈值 | 当前网页 bundle 未检出 needCode，公开规则未给出阈值；本轮单次响应 needCode=false。扩展 needCode=true 时停止并保留结果的合成测试通过。 | needCode 的真实触发条件与请求阈值未知。500ms 仍只是初始策略，不能标为“实测安全”。 |
+
+`status=10000` 的含义另由公开 `authCode:1e4` 和 `FM` 中重置登录状态的分支确认。没有人为使真实会话过期来触发它。
+
+### 单次未登录请求
+
+向 `https://api.duoduo.link/api` 发送 1 次搜索 RPC，请求词为通用词“微积分”，page=1、limit=20、sort=hot_value、scene=searchResult，省略 group_id。使用已核对的公开 RSA 公钥和本次随机生成的 AES key/IV；不发送 ddtk、Authorization 或 Cookie，不读取浏览器资料，不跟随重定向，不重试。
+
+解密后只输出以下统计，没有保存或输出帖子内容、完整响应或服务端消息：
+
+```json
+{
+  "httpStatus": 200,
+  "decrypted": true,
+  "status": 0,
+  "entryCount": 0,
+  "needCode": false,
+  "timestampPresent": true,
+  "messageMentionsLogin": false,
+  "messageMentionsVerification": false
+}
+```
+
+这次实测证明当时服务端接受了该未登录搜索信封，并能用同一请求的 key/IV 解密响应；不证明已登录用户召回范围，也不解释空结果原因。
+
+重新运行 `cd frontend && npm test -- src/extension/sites/duo/index.test.ts src/extension/sites/duo/envelope.test.ts`，37 项测试通过。本轮只更新调查记录，没有修改运行时代码。
+
+上述未知项保留为开发侧调查限制，不要求普通用户继续进行技术操作，也不伪装成全部真人验收通过。若以后自然出现验证码或权限异常，再根据当次非敏感现象调查；阈值应以平台说明为准。
