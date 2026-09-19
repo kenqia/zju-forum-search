@@ -1,6 +1,6 @@
 import { buildFeedbackPayload } from './feedback-payload';
 import { folded, normalizeText } from './text';
-import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, ModelQueryPlan, PlannedSearch, SourceCapabilities } from './types';
+import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, ModelQueryPlan, PlannedSearch, SourceCapabilities, TimeConstraint } from './types';
 
 export interface PlannerTransport {
   chatCompletions(settings: ExtensionSettings, messages: { role: string; content: string }[], signal?: AbortSignal): Promise<string>;
@@ -16,7 +16,7 @@ export class PlannerError extends Error {
 
 export function hasExplicitTimeConstraint(query: string): boolean {
   const value = normalizeText(query);
-  return /(?:19|20)\d{2}\s*年?|(?:近|最近|过去|前)\s*[零〇一二两三四五六七八九十百\d]+\s*(?:年|个月|月|周|天)|(?:今年|去年|前年|本年|上半年|下半年|这学期|本学期|上学期|去年同期)/u.test(value);
+  return /(?:19|20)\d{2}\s*年?|最近|近\s*半\s*个?月|(?:近|过去|前)\s*[零〇一二两三四五六七八九十百\d]+\s*(?:年|个?月|周|天|日)|(?:今年|去年|前年|本年|上半年|下半年|这学期|本学期|上学期|去年同期)/u.test(value);
 }
 
 function currentLocalDate(): string {
@@ -25,6 +25,63 @@ function currentLocalDate(): string {
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+const CHINESE_DIGITS: Record<string, number> = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+
+function parseLocalCount(text: string): number | null {
+  const value = normalizeText(text);
+  if (!value) return null;
+  if (/^\d+$/u.test(value)) return Number.parseInt(value, 10);
+  if (value === '半') return null;
+  if (value === '十') return 10;
+  const parts = value.split('十');
+  if (parts.length === 2 && parts.every((part) => part === '' || CHINESE_DIGITS[part] !== undefined)) {
+    const tens = parts[0] === '' ? 1 : CHINESE_DIGITS[parts[0]];
+    const ones = parts[1] === '' ? 0 : CHINESE_DIGITS[parts[1]];
+    return tens * 10 + ones;
+  }
+  if (value.length === 1 && CHINESE_DIGITS[value] !== undefined) return CHINESE_DIGITS[value];
+  return null;
+}
+
+function isoOf(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/** Local relative-time ranges resolved on the device calendar; overrides model dates. */
+export function localRelativeTimeRange(query: string, today: string = currentLocalDate()): TimeConstraint | null {
+  const text = normalizeText(query);
+  const [year, month, day] = today.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const end = new Date(year, month - 1, day);
+  const range = (start: Date, expression: string): TimeConstraint => ({
+    expression, startDate: isoOf(start), endDate: isoOf(end),
+  });
+  const daysAgo = (count: number) => new Date(year, month - 1, day - (count - 1));
+  /** Month/year offsets clamp to the last day of the target month (月末/闰年). */
+  const monthsAgo = (count: number) => {
+    const target = new Date(year, month - 1 - count, 1);
+    const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+    return new Date(target.getFullYear(), target.getMonth(), Math.min(day, lastDay));
+  };
+
+  const numbered = /(?<prefix>最近|近|过去)\s*(?<count>[零〇一二两三四五六七八九十百]+|\d+|半)\s*(?:个)?\s*(?<unit>天|日|周|月|年)/u.exec(text);
+  if (numbered) {
+    const { count: countText, unit } = numbered.groups as { prefix: string; count: string; unit: string };
+    if (countText === '半' && unit === '月') return range(daysAgo(15), numbered[0]);
+    const count = parseLocalCount(countText);
+    if (!count || count < 1) return null;
+    if (unit === '天' || unit === '日') return range(daysAgo(count), numbered[0]);
+    if (unit === '周') return range(daysAgo(count * 7), numbered[0]);
+    if (unit === '月') return range(monthsAgo(count), numbered[0]);
+    return range(monthsAgo(count * 12), numbered[0]);
+  }
+  if (/最近/u.test(text)) return range(daysAgo(30), '最近');
+  return null;
 }
 
 function validIsoDate(value: string | null): boolean {
@@ -153,10 +210,12 @@ function assertFeedbackShape(value: unknown): asserts value is Record<string, un
   }
 }
 
-function modelPlanFromContent(content: string, query: string): ModelQueryPlan {
+function modelPlanFromContent(content: string, query: string, today?: () => string): ModelQueryPlan {
   const plan = normalizeModelPlan(parseJson(content));
   if (!plan.summary) plan.summary = query;
   if (!plan.searches.length) throw new PlannerError('模型没有返回可用检索词');
+  const local = localRelativeTimeRange(query, today?.());
+  if (local) plan.timeConstraint = local;
   validateTimeRange(plan, query);
   return plan;
 }
@@ -257,7 +316,7 @@ export class PlannerClient {
       { role: 'user', content: JSON.stringify({ query: query.trim(), current_date: this.today() }) },
     ], signal);
     try {
-      return modelPlanFromContent(content, query);
+      return modelPlanFromContent(content, query, this.today);
     } catch (error) {
       if (error instanceof PlannerError && isPureKeywordQuery(query)) return originalQueryFallback(query);
       throw error;
@@ -283,6 +342,6 @@ export class PlannerClient {
         }),
       },
     ], signal);
-    return modelPlanFromContent(content, query);
+    return modelPlanFromContent(content, query, this.today);
   }
 }

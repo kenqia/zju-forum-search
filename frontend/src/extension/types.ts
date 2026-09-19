@@ -36,6 +36,7 @@ export interface TopicCandidate {
 }
 
 export interface RatePolicy {
+  /** Hard per-run cap on site search() calls set by the source; user limit applies on top. */
   maxSearchCalls: number;
   minRequestIntervalMs: number;
 }
@@ -141,6 +142,9 @@ export interface ExtensionSettings {
   llmBaseUrl: string;
   llmApiKey: string;
   llmModel: string;
+  /** Site search calls allowed per run, including pagination. */
+  searchRequestLimit: number;
+  /** Legacy field kept for stored-settings compatibility; no longer limits a run. */
   searchBudgetSeconds: number;
 }
 
@@ -178,6 +182,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   llmBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   llmApiKey: '',
   llmModel: 'qwen3.8-27b',
+  searchRequestLimit: 30,
   searchBudgetSeconds: 60,
 };
 

@@ -1,7 +1,7 @@
 import { FEEDBACK_METADATA_BYTE_LIMIT } from './feedback-payload';
 import { describe, expect, it } from 'vitest';
 
-import { buildFeedbackMessages, normalizeModelPlan, PlannerClient, PlannerError } from './planner';
+import { buildFeedbackMessages, localRelativeTimeRange, normalizeModelPlan, PlannerClient, PlannerError } from './planner';
 import { DEFAULT_SETTINGS, type SourceCapabilities, type FeedbackEvidence } from './types';
 
 const capabilities: SourceCapabilities = { searchSurface: 'title', querySyntax: 'plain-keyword' };
@@ -119,14 +119,25 @@ describe('PlannerClient', () => {
 
   it('rejects missing, invalid, or reversed dates for an explicit time request', async () => {
     const response = (startDate: string | null, endDate: string | null) => JSON.stringify({
-      summary: '近三年微积分资料', searches: [{ query: '微积分', purpose: '' }], required_concepts: [], excluded_terms: [],
-      time_constraint: { expression: '近三年', start_date: startDate, end_date: endDate },
+      summary: '上学期微积分资料', searches: [{ query: '微积分', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '上学期', start_date: startDate, end_date: endDate },
     });
 
     for (const [startDate, endDate] of [[null, null], ['2026-02-30', '2026-09-15'], ['2026-09-15', '2023-09-15']] as const) {
       const client = new PlannerClient({ chatCompletions: async () => response(startDate, endDate) }, DEFAULT_SETTINGS, capabilities);
-      await expect(client.planFirstRound('近三年的微积分资料')).rejects.toThrow('模型返回的时间范围无效');
+      await expect(client.planFirstRound('上学期的微积分资料')).rejects.toThrow('模型返回的时间范围无效');
     }
+  });
+
+  it('does not consult model dates when the relative expression is resolved locally', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      summary: '近三年微积分资料', searches: [{ query: '微积分', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '近三年', start_date: 'invalid', end_date: null },
+    }) }, DEFAULT_SETTINGS, capabilities, () => '2026-09-15');
+
+    await expect(client.planFirstRound('近三年的微积分资料')).resolves.toMatchObject({
+      timeConstraint: { startDate: '2023-09-15', endDate: '2026-09-15' },
+    });
   });
 
   it('accepts a descriptive no-time expression when dates are empty for an untimed query', async () => {
@@ -162,6 +173,49 @@ describe('PlannerClient', () => {
       requiredConcepts: [{ name: '课程', expressions: ['高数', '高等数学'] }],
       excludedTerms: ['求助'],
       timeConstraint: { expression: '2025 年', startDate: '2025-01-01', endDate: '2025-12-31' },
+    });
+  });
+});
+
+describe('local relative time resolution', () => {
+  it.each([
+    ['最近的微积分资料', '2026-09-19', { startDate: '2026-08-21', endDate: '2026-09-19' }],
+    ['近半个月的微积分资料', '2026-09-19', { startDate: '2026-09-05', endDate: '2026-09-19' }],
+    ['近 3 天的讨论', '2026-09-19', { startDate: '2026-09-17', endDate: '2026-09-19' }],
+    ['最近两周的帖子', '2026-09-19', { startDate: '2026-09-06', endDate: '2026-09-19' }],
+    ['近两个月的资料', '2026-09-19', { startDate: '2026-07-19', endDate: '2026-09-19' }],
+    ['近两年的操作系统资料', '2026-09-19', { startDate: '2024-09-19', endDate: '2026-09-19' }],
+    ['最近 1 个月', '2026-01-31', { startDate: '2025-12-31', endDate: '2026-01-31' }],
+    ['近 1 年', '2025-03-01', { startDate: '2024-03-01', endDate: '2025-03-01' }],
+    ['近 3 个月', '2026-05-31', { startDate: '2026-02-28', endDate: '2026-05-31' }],
+  ] as const)('resolves %s on %s', (query, today, expected) => {
+    expect(localRelativeTimeRange(query, today)).toMatchObject(expected);
+  });
+
+  it('returns null for expressions that need the model', () => {
+    expect(localRelativeTimeRange('2025 年的高数资料', '2026-09-19')).toBeNull();
+    expect(localRelativeTimeRange('上学期的操作系统讨论', '2026-09-19')).toBeNull();
+  });
+
+  it('overrides the model time range for locally parsed queries', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      summary: '最近微积分资料', searches: [{ query: '微积分', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '最近', start_date: '2020-01-01', end_date: '2020-12-31' },
+    }) }, DEFAULT_SETTINGS, capabilities, () => '2026-09-19');
+
+    await expect(client.planFirstRound('最近的微积分资料')).resolves.toMatchObject({
+      timeConstraint: { startDate: '2026-08-21', endDate: '2026-09-19' },
+    });
+  });
+
+  it('keeps model dates for explicit expressions that are not locally parsed', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      summary: '2025 年资料', searches: [{ query: '微积分', purpose: '' }], required_concepts: [], excluded_terms: [],
+      time_constraint: { expression: '2025 年', start_date: '2025-01-01', end_date: '2025-12-31' },
+    }) }, DEFAULT_SETTINGS, capabilities, () => '2026-09-19');
+
+    await expect(client.planFirstRound('2025 年的微积分资料')).resolves.toMatchObject({
+      timeConstraint: { startDate: '2025-01-01', endDate: '2025-12-31' },
     });
   });
 });

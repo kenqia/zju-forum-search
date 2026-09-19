@@ -89,7 +89,6 @@ describe('SearchSession', () => {
       planner,
       source: asPageSource(cc98.searchTopics),
       sleep: async () => undefined,
-      now: (() => { let value = 0; return () => value++; })(),
       onUpdate: (snapshot) => updates.push(snapshot),
     });
 
@@ -122,7 +121,6 @@ describe('SearchSession', () => {
       planner,
       source: asPageSource(vi.fn(async () => [])),
       sleep: async () => undefined,
-      now: (() => { let value = 0; return () => value++; })(),
     });
 
     const result = await session.run('一个找不到的主题', 60);
@@ -143,10 +141,9 @@ describe('SearchSession', () => {
       planner,
       source: asPageSource(vi.fn(async (_query, from) => Array.from({ length: 20 }, (_, i) => ({ id: `${from}-${i}`, title: '高数' })))),
       sleep: async () => undefined,
-      now: () => 0,
     });
 
-    const result = await session.run('高数', 60);
+    const result = await session.run('高数', 30);
 
     expect(result.requestsMade).toBe(30);
     expect(result.stopReason).toBe('request_limit');
@@ -163,7 +160,6 @@ describe('SearchSession', () => {
       },
       source: asPageSource(vi.fn(async (query) => [{ id: query, title: query }])),
       sleep: async (milliseconds) => { sleeps.push(milliseconds); },
-      now: () => 0,
     });
 
     const result = await session.run('高数', 60);
@@ -184,7 +180,6 @@ describe('SearchSession', () => {
       },
       source: asPageSource(searchTopics),
       sleep: async () => { session.stop(); },
-      now: () => 0,
     });
 
     const result = await session.run('高数', 60);
@@ -206,7 +201,6 @@ describe('SearchSession', () => {
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(vi.fn()),
-      now: () => 0,
     });
 
     const running = session.run('高数', 60);
@@ -217,8 +211,7 @@ describe('SearchSession', () => {
     expect(result.stopReason).toBe('user_stopped');
   });
 
-  it('stops at the time budget before requesting another full page', async () => {
-    let clockReads = 0;
+  it('stops at the request limit before requesting another full page', async () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
@@ -227,38 +220,36 @@ describe('SearchSession', () => {
       },
       source: asPageSource(vi.fn(async () => Array.from({ length: 20 }, (_, index) => ({ id: String(index), title: '高数' })))),
       sleep: async () => undefined,
-      now: () => (++clockReads <= 3 ? 0 : 1000),
     });
 
     const result = await session.run('高数', 1);
 
     expect(result.requestsMade).toBe(1);
-    expect(result.stopReason).toBe('budget_exhausted');
+    expect(result.stopReason).toBe('request_limit');
+    expect(result.statusText).toContain('1 次');
   });
 
-  it('does not charge model planning time against the CC98 search budget', async () => {
-    let clock = 0;
-    const searchTopics = vi.fn(async () => []);
+  it('counts pagination requests toward the same run limit', async () => {
+    const calls: Array<[string, number]> = [];
+    const searchTopics = vi.fn(async (query: string, from: number) => {
+      calls.push([query, from]);
+      return Array.from({ length: 20 }, (_, index) => ({ id: `${query}-${from}-${index}`, title: '高数' }));
+    });
     const session = new SearchSession({
       planner: {
-        planFirstRound: async () => {
-          clock += 60_000;
-          return { ...initialPlan, searches: [{ query: '高数', purpose: '' }] };
-        },
+        planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
         planFeedback: vi.fn(),
-        planBlindExpansion: vi.fn(async () => {
-          clock += 60_000;
-          return { ...initialPlan, searches: [{ query: '微积分', purpose: '' }] };
-        }),
+        planBlindExpansion: vi.fn(),
       },
       source: asPageSource(searchTopics),
       sleep: async () => undefined,
-      now: () => clock,
     });
 
-    await session.run('近三年的高数资料', 10);
+    const result = await session.run('高数资料', 3);
 
-    expect(searchTopics).toHaveBeenCalled();
+    expect(result.stopReason).toBe('request_limit');
+    expect(result.requestsMade).toBe(3);
+    expect(calls).toEqual([['高数', 0], ['高数', 20], ['高数', 40]]);
   });
 
   it('keeps partial results and identifies a feedback model timeout', async () => {
@@ -272,7 +263,6 @@ describe('SearchSession', () => {
       },
       source: asPageSource(vi.fn(async () => [{ id: 'kept', title: '高数资料' }])),
       sleep: async () => undefined,
-      now: () => 0,
     });
 
     const result = await session.run('高数资料', 60);
@@ -303,7 +293,6 @@ describe('SearchSession', () => {
         { id: 'old', title: '微积分期末资料', time: '2012-01-01' },
       ])),
       sleep: async () => undefined,
-      now: () => 0,
     });
 
     const result = await session.run('近三年的微积分期末资料', 60);
@@ -328,7 +317,6 @@ describe('SearchSession', () => {
         { id: 'old', title: '微积分资料', time: '2012-01-01' },
       ])),
       sleep: async () => undefined,
-      now: () => 0,
     });
 
     const result = await session.run('微积分资料', 60);
@@ -352,7 +340,6 @@ describe('SearchSession', () => {
       },
       source: asPageSource(searchTopics),
       sleep: async () => undefined,
-      now: () => 0,
     });
 
     const result = await session.run('微积分', 60);
@@ -377,7 +364,6 @@ describe('SearchSession', () => {
       planner,
       source: asPageSource(vi.fn(async () => [{ id: 'old', title: '微积分资料', time: '2012-01-01' }])),
       sleep: async () => undefined,
-      now: () => 0,
     });
 
     const result = await session.run('近三年的微积分期末资料', 60);
@@ -391,7 +377,7 @@ describe('SearchSession', () => {
 
   it('exposes a Chinese status for every bounded stop condition', () => {
     const reasons: SearchStopReason[] = [
-      'model_stop', 'no_new_candidates', 'no_new_searches', 'no_results', 'budget_exhausted',
+      'model_stop', 'no_new_candidates', 'no_new_searches', 'no_results',
       'request_limit', 'user_stopped', 'replaced', 'not_logged_in', 'rate_limited', 'model_timeout', 'failed',
     ];
 
@@ -423,7 +409,7 @@ describe('retrieved candidate documents', () => {
     const source = {
       sourceId: 'example',
       capabilities: { searchSurface: 'fulltext' as const, querySyntax: 'plain-keyword' as const },
-      ratePolicy: { maxSearchCalls: 10, minRequestIntervalMs: 0 },
+      ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 },
       async search(query: string) {
         return { hits: ['complete', 'partial'].map((id) => ({
           candidate: { sourceId: 'example', id, title: '展示标题', titleOrigin: 'native' as const, url: `https://example.test/${id}` },
@@ -457,7 +443,7 @@ describe('core feedback privacy', () => {
     const session = new SearchSession({
       source: {
         sourceId: 'example', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword' },
-        ratePolicy: { maxSearchCalls: 2, minRequestIntervalMs: 0 },
+        ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 },
         search: async () => ({ hits: [{
           candidate: { sourceId: 'example', id: 'local-id', title: '正文派生的秘密标题', titleOrigin: 'body-derived' as const,
             url: 'https://example.test/private', author: '公开作者', publishedAt: '2026-09-17', section: '公开板块', replyCount: 2,
@@ -479,22 +465,35 @@ describe('core feedback privacy', () => {
 });
 
 describe('source policy and search budget', () => {
-  it('uses a non-CC98 request policy and never charges planner waits', async () => {
-    let clock = 0;
+  it('enforces the source hard cap and applies the request interval between calls', async () => {
     const waits: number[] = [];
-    const search = vi.fn(async () => { clock += 100; return { hits: [], nextCursor: 'next' }; });
+    const search = vi.fn(async () => ({ hits: [], nextCursor: 'next' }));
     const result = await new SearchSession({
       source: { sourceId: 'example', capabilities: { searchSurface: 'mixed', querySyntax: 'plain-keyword' },
         ratePolicy: { maxSearchCalls: 2, minRequestIntervalMs: 7 }, search },
-      planner: { planFirstRound: async () => { clock += 90_000; return initialPlan; },
+      planner: { planFirstRound: async () => initialPlan,
         planFeedback: vi.fn(), planBlindExpansion: vi.fn() },
-      now: () => clock,
-      sleep: async (ms) => { waits.push(ms); clock += ms; },
-    }).run('测试', 1);
+      sleep: async (ms) => { waits.push(ms); },
+    }).run('测试', 30);
     expect(result.stopReason).toBe('request_limit');
     expect(result.statusText).toContain('2 次');
     expect(search).toHaveBeenCalledTimes(2);
     expect(waits).toEqual([7]);
+  });
+
+  it('applies the user request limit below the source hard cap', async () => {
+    const search = vi.fn(async () => ({ hits: [], nextCursor: 'next' }));
+    const result = await new SearchSession({
+      source: { sourceId: 'example', capabilities: { searchSurface: 'mixed', querySyntax: 'plain-keyword' },
+        ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 }, search },
+      planner: { planFirstRound: async () => ({ ...initialPlan,
+          searches: Array.from({ length: 5 }, (_, index) => ({ query: `检索词-${index}`, purpose: '' })) }),
+        planFeedback: vi.fn(), planBlindExpansion: vi.fn() },
+      sleep: async () => undefined,
+    }).run('测试', 5);
+    expect(result.stopReason).toBe('request_limit');
+    expect(result.statusText).toContain('5 次');
+    expect(search).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -504,7 +503,7 @@ describe('bounded feedback at the planner port', () => {
     let count = 0;
     const session = new SearchSession({
       source: {
-        sourceId: 'example', ratePolicy: { maxSearchCalls: 1, minRequestIntervalMs: 0 },
+        sourceId: 'example', ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 },
         capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' },
         search: async () => ({ hits: Array.from({ length: 200 }, (_, index) => ({
           candidate: { sourceId: 'example', id: String(index), title: '中文'.repeat(100), titleOrigin: 'native' as const,

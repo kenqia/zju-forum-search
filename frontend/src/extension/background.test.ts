@@ -48,6 +48,7 @@ describe('background message boundary', () => {
       llmBaseUrl: 'https://models.example.com/v1',
       llmApiKey: 'fake-key',
       llmModel: 'model-name',
+      searchRequestLimit: 45,
       searchBudgetSeconds: 45,
     };
 
@@ -86,6 +87,7 @@ describe('background message boundary', () => {
           llmBaseUrl: 'https://models.example.com/v1',
           llmApiKey: 'fake-key',
           llmModel: 'model-name',
+          searchRequestLimit: 45,
           searchBudgetSeconds: 45,
         })),
         set: vi.fn(),

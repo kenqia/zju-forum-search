@@ -122,10 +122,10 @@ function SettingsPanel({ runtime, settings, onSettings }: {
       <label>模型名称
         <input value={draft.llmModel} onChange={(event) => setDraft({ ...draft, llmModel: event.target.value })} placeholder="model-name" required />
       </label>
-      <label>站点检索时长（秒）
-        <input type="number" min="10" max="300" value={draft.searchBudgetSeconds} onChange={(event) => setDraft({ ...draft, searchBudgetSeconds: Number(event.target.value) })} required />
+      <label>站点检索请求次数上限
+        <input type="number" min="1" max="100" value={draft.searchRequestLimit} onChange={(event) => setDraft({ ...draft, searchRequestLimit: Number(event.target.value) })} required />
       </label>
-      <p className="hint">模型每次最多等待 20 秒，不占用这段检索时长。</p>
+      <p className="hint">每次站点搜索请求都计入上限，包括分页；模型调用不计入。</p>
       <div className="settings-actions">
         <p className="hint">保存时只申请该 base URL 所在主机。</p>
         <button className="primary" disabled={saving}>{saving ? '保存中…' : '保存设置'}</button>
@@ -189,7 +189,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
         onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
       });
       controller.session = nextSession;
-      await nextSession.run(normalized, settings.searchBudgetSeconds);
+      await nextSession.run(normalized, settings.searchRequestLimit);
       if (controller.session === nextSession) controller.session = null;
     } catch (error) {
       if (controller.runId !== currentRun) return;
@@ -206,7 +206,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
 
   return <>
     <form className="search-form" onSubmit={search}>
-      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：找 2025 年的高数复习资料" aria-label="自然语言查询" required />
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：找近两年的操作系统课程的讨论和资料" aria-label="自然语言查询" required />
       <button className="primary">{running ? '开始新搜索' : '开始搜索'}</button>
     </form>
     <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>

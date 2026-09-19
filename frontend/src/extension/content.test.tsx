@@ -97,8 +97,9 @@ describe('extension content UI', () => {
     });
     expect(root.querySelector('input[type="password"]')).not.toBeNull();
     expect((root.querySelector('input[type="password"]') as HTMLInputElement).value).toBe('');
-    expect(root.textContent).toContain('站点检索时长（秒）');
-    expect(root.textContent).toContain('模型每次最多等待 20 秒，不占用这段检索时长。');
+    expect(root.textContent).toContain('站点检索请求次数上限');
+    expect(root.textContent).not.toContain('检索时长');
+    expect(root.textContent).toContain('包括分页');
     expect(document.querySelector('input[type="password"]')).toBeNull();
 
     await act(async () => {

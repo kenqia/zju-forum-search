@@ -15,13 +15,13 @@ ADR-0004 把搜索定义为「模型规划 → 平台召回 → 本地重排 →
 
 - `SearchSourceAdapter`：无状态站点描述符，按 `id` 注册。声明 `capabilities`、`ratePolicy`、`pageMatches`、`apiHosts`（后两者供 manifest 消费）、`createSession(pageContext)`。
 - `SearchSourceSession`：每次页面/认证绑定的实例。token、cookie、CSRF 等认证材料只存在于 session 与 adapter 内部，不进 UI、不进 core。
-- UI 只做 `sourceRegistry.resolve(location.href)` → `adapter.createSession(...)` → `new SearchSession({ planner, source, budget })`。
+- UI 只做 `sourceRegistry.resolve(location.href)` → `adapter.createSession(...)` → `new SearchSession({ planner, source })` 并以用户请求次数上限启动 `run(query, requestLimit)`。
 - 错误面：`SourceError extends Error`，`code: 'not_logged_in' | 'rate_limited' | 'permission_denied' | 'network' | 'invalid_response'`。adapter 负责把本站 HTTP 状态与异常翻译为 `SourceError`；**`AbortError` 不翻译、原样传播**，core 用 AbortError 驱动取消。core 不再出现 `cc98_limited` 这类站点名。
 
-### 2. SearchBudget 与 RatePolicy 是两个概念
+### 2. 请求次数上限与 RatePolicy 是两个概念
 
-- `SearchBudget`：用户为一次搜索给的时长预算，core 拥有。只扣减搜索侧耗时与强制等待，模型等待不消耗（沿用 ADR-0004）。
-- `RatePolicy = { maxSearchCalls, minRequestIntervalMs }`：`maxSearchCalls` 是**逻辑 search() 调用次数上限**（adapter 内部分页展开不计入该口径——一次 `search()` 即一次调用）。
+- 用户请求次数上限：一次搜索允许发出的逻辑 `search()` 调用次数（默认 30，范围 1–100），core 拥有。分页请求同样计入该口径——一次 `search()` 即一次调用；模型调用不计数。
+- `RatePolicy = { maxSearchCalls, minRequestIntervalMs }`：`maxSearchCalls` 是站点侧硬上限兜底，与用户上限取较小者；`minRequestIntervalMs` 是站点请求间的最小间隔。
 - **分页完全藏进 adapter**：`pageSize` 不进 core policy；`search()` 返回 `SearchPage { hits: SearchHit[], nextCursor?: string }`，cursor 是不透明字符串，offset/cursor/无分页的差异不出 adapter。
 
 ### 3. SearchHit、候选三层模型与 RankingDocument
@@ -46,7 +46,7 @@ manifest 暂手写，但增加一个契约测试：断言 `∪(所有 adapter.pa
 ```
 UI → sourceRegistry.resolve(location.href)
    → adapter.createSession(pageContext)
-   → SearchSession（core：planner + ranking + SearchBudget + RatePolicy 执行）
+   → SearchSession（core：planner + ranking + 请求次数上限 + RatePolicy 执行）
         │
         └→ SearchSourceSession（port）
               ├─ Cc98Adapter（sites/cc98/：token、/topic/search、包壳解析、URL、错误翻译）
@@ -66,7 +66,7 @@ UI → sourceRegistry.resolve(location.href)
 
 ## 2026-09-17 接手审查补记
 
-CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型、SearchBudget 与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17 已落地 registry 与 manifest 契约测试，#18 adapter 与 #19 向导已实现，真实会话验收待完成。详见 [接手审查](../research/search-source-handoff-review.md)。
+CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17 已落地 registry 与 manifest 契约测试，#18 adapter 与 #19 向导已实现，真实会话验收待完成。#21 起用户控制由时长预算改为请求次数上限，`SearchBudget` 已移除，站点 `maxSearchCalls` 保留为硬上限兜底。详见 [接手审查](../research/search-source-handoff-review.md)。
 
 用户已确认继续沿用正文不出域约定。朵朵 `content` 可作为本地展示标题和 RankingDocument.snippet，但必须标记 `titleOrigin: body-derived`，反馈中的 title 为空。没有原生标题时，模型仅能依据查询、检索命中数与其他允许的元数据决定后续搜索，不能从正文学习词汇。#16 的提示词应如实说明这一限制。
 

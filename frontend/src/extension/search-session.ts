@@ -4,7 +4,6 @@ import { folded, normalizeText } from './text';
 import { rankAndFilterCandidates } from './ranking';
 import { firstObservedRound, mergeHits } from './retrieval';
 import { createFeedbackInput } from './feedback-payload';
-import { SearchBudget } from './search-budget';
 import {
   SourceError,
   type FeedbackPlan,
@@ -20,7 +19,6 @@ export type SearchStopReason =
   | 'no_new_candidates'
   | 'no_new_searches'
   | 'no_results'
-  | 'budget_exhausted'
   | 'request_limit'
   | 'user_stopped'
   | 'replaced'
@@ -56,7 +54,6 @@ export interface SearchSessionDependencies {
   planner: SearchPlanner;
   source: SearchSourceSession;
   sleep?: (milliseconds: number) => Promise<void>;
-  now?: () => number;
   onUpdate?: (snapshot: SearchSnapshot) => void;
 }
 
@@ -72,8 +69,7 @@ export function stopReasonText(reason: SearchStopReason): string {
     no_new_candidates: '本轮没有新增候选，搜索已停止。',
     no_new_searches: '没有新的可执行检索词，搜索已停止。',
     no_results: '没有找到主题帖。',
-    budget_exhausted: '已用完搜索时长，保留当前部分结果。',
-    request_limit: '已达到搜索请求硬上限，保留当前部分结果。',
+    request_limit: '已达到站点检索请求次数上限，保留当前部分结果。',
     user_stopped: '已由用户停止，保留当前部分结果。',
     replaced: '已发起新查询，旧搜索已终止。',
     not_logged_in: '请先登录，然后刷新页面再试。',
@@ -88,7 +84,6 @@ export class SearchSession {
   private readonly planner: SearchPlanner;
   private readonly source: SearchSourceSession;
   private readonly sleep: (milliseconds: number) => Promise<void>;
-  private readonly now: () => number;
   private readonly onUpdate?: (snapshot: SearchSnapshot) => void;
   private controller = new AbortController();
   private requestedStop: SearchStopReason | null = null;
@@ -102,7 +97,6 @@ export class SearchSession {
     this.planner = dependencies.planner;
     this.source = dependencies.source;
     this.sleep = dependencies.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-    this.now = dependencies.now ?? (() => Date.now());
     this.onUpdate = dependencies.onUpdate;
   }
 
@@ -121,10 +115,9 @@ export class SearchSession {
     return this.snapshot;
   }
 
-  async run(query: string, budgetSeconds: number): Promise<SearchSnapshot> {
+  async run(query: string, requestLimit: number): Promise<SearchSnapshot> {
     const normalizedQuery = normalizeText(query);
     const enforceTimeRange = hasExplicitTimeConstraint(normalizedQuery);
-    const budget = new SearchBudget(budgetSeconds, this.now);
     const candidates = new Map<string, RetrievedCandidate>();
     const executed = new Map<string, { query: string; hitCount: number }>();
     const inactive = new Set<string>();
@@ -132,6 +125,7 @@ export class SearchSession {
     let round = 1;
     let searches: PlannedSearch[];
     const { maxSearchCalls, minRequestIntervalMs } = this.source.ratePolicy;
+    const maxRequests = Math.min(maxSearchCalls, Math.max(1, Math.round(Number.isFinite(requestLimit) ? requestLimit : 1)));
 
     this.publish({ query: normalizedQuery, phase: 'planning', round, statusText: '正在规划首轮检索词…' });
     try {
@@ -146,7 +140,7 @@ export class SearchSession {
 
       while (true) {
         if (this.requestedStop) return this.finish(this.requestedStop);
-        if (budget.exhausted) return this.finish('budget_exhausted');
+        if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
         const deduped = searches.filter((search, index, all) => {
           const key = folded(search.query);
           return key && !executed.has(key) && all.findIndex((item) => folded(item.query) === key) === index;
@@ -164,16 +158,14 @@ export class SearchSession {
 
         while (queue.length) {
           if (this.requestedStop) return this.finish(this.requestedStop);
-          if (this.snapshot.requestsMade >= maxSearchCalls) return this.finish('request_limit', `已达到 ${maxSearchCalls} 次搜索请求硬上限，保留当前部分结果。`);
-          if (budget.exhausted) return this.finish('budget_exhausted');
+          if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
           const current = queue.shift()!;
           if (this.snapshot.requestsMade > 0) {
-            await budget.wait(minRequestIntervalMs, this.sleep);
+            await this.sleep(minRequestIntervalMs);
             if (this.requestedStop) return this.finish(this.requestedStop);
-            if (budget.exhausted) return this.finish('budget_exhausted');
           }
           this.publish({ requestsMade: this.snapshot.requestsMade + 1 });
-          const page = await budget.request(() => this.source.search(current.search.query, current.cursor, this.controller.signal));
+          const page = await this.source.search(current.search.query, current.cursor, this.controller.signal);
           roundHits.set(folded(current.search.query), (roundHits.get(folded(current.search.query)) ?? 0) + page.hits.length);
           mergeHits(candidates, page.hits, current.search.query, round);
           this.publish(candidateView());
@@ -199,8 +191,6 @@ export class SearchSession {
           inactiveSearches: [...inactive],
           statusText: `第 ${round} 轮完成，新增 ${view.results.length - before} 个候选。`,
         });
-
-        if (budget.exhausted) return this.finish('budget_exhausted');
 
         if (round === 1 && view.results.length === 0) {
           this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });

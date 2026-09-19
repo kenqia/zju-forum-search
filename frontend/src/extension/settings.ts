@@ -2,6 +2,14 @@ import { DEFAULT_SETTINGS, type ExtensionSettings } from './types';
 
 const MIN_BUDGET_SECONDS = 10;
 const MAX_BUDGET_SECONDS = 300;
+const MIN_REQUEST_LIMIT = 1;
+const MAX_REQUEST_LIMIT = 100;
+
+function clampedCount(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+}
 
 function parseHttpUrl(value: string): URL {
   let parsed: URL;
@@ -26,7 +34,8 @@ export function normalizeSettings(value: Partial<ExtensionSettings>): ExtensionS
     llmBaseUrl: baseUrl.toString().replace(/\/$/u, ''),
     llmApiKey: String(value.llmApiKey ?? '').trim(),
     llmModel: String(value.llmModel ?? '').trim(),
-    searchBudgetSeconds: Math.min(MAX_BUDGET_SECONDS, Math.max(MIN_BUDGET_SECONDS, Number.isFinite(budget) ? Math.round(budget) : DEFAULT_SETTINGS.searchBudgetSeconds)),
+    searchRequestLimit: clampedCount(value.searchRequestLimit ?? DEFAULT_SETTINGS.searchRequestLimit, MIN_REQUEST_LIMIT, MAX_REQUEST_LIMIT, DEFAULT_SETTINGS.searchRequestLimit),
+    searchBudgetSeconds: clampedCount(budget, MIN_BUDGET_SECONDS, MAX_BUDGET_SECONDS, DEFAULT_SETTINGS.searchBudgetSeconds),
   };
 }
 
