@@ -15,6 +15,7 @@ describe('extension settings', () => {
       llmApiKey: 'key-value',
       llmModel: 'qwen-test',
       searchRequestLimit: 100,
+      intentFilterEnabled: true,
       searchBudgetSeconds: 300,
     });
     expect(modelHostPermission('https://models.example.com/openai/v1')).toBe('https://models.example.com/*');
@@ -26,7 +27,7 @@ describe('extension settings', () => {
   });
 
   it('falls back to the default request limit for invalid values', () => {
-    for (const value of [Number.NaN, 'abc', Number.POSITIVE_INFINITY]) {
+    for (const value of [Number.NaN, 'abc', '', null, Number.POSITIVE_INFINITY]) {
       expect(normalizeSettings({ searchRequestLimit: value as number }).searchRequestLimit).toBe(30);
     }
     expect(normalizeSettings({ searchRequestLimit: 0 }).searchRequestLimit).toBe(1);

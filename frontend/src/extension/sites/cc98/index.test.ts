@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { Cc98Client, Cc98SourceSession, readCc98AccessToken } from './index';
+import { CC98_RATE_POLICY, Cc98Client, Cc98SourceSession, readCc98AccessToken } from './index';
 
 describe('CC98 browser adapter', () => {
+  it('allows the full user-configurable request range', () => {
+    expect(CC98_RATE_POLICY.maxSearchCalls).toBe(100);
+  });
+
   it('reads the current short-lived token without changing it', () => {
     const storage = {
       getItem: (key: string) => ({
@@ -54,6 +58,15 @@ describe('CC98 source session contract', () => {
       expect(page.nextCursor).toBe('20');
       expect((await session.search('测试', page.nextCursor)).hits[0].position).toBe(22);
     }
+  });
+
+  it('advances offsets by the complete response length and rejects invalid offsets', async () => {
+    const items = Array.from({ length: 25 }, (_, index) => ({ id: index, title: `主题 ${index}` }));
+    const session = new Cc98SourceSession('Bearer synthetic', async () => new Response(JSON.stringify(items), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    await expect(session.search('测试', undefined)).resolves.toMatchObject({ hits: { length: 25 }, nextCursor: '25' });
+    await expect(session.search('测试', 'not-an-offset')).rejects.toMatchObject({ code: 'invalid_response' });
   });
 });
 

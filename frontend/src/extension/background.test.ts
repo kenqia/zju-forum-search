@@ -30,8 +30,8 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
 }
 
 describe('background message boundary', () => {
-  it.each([undefined, { searchSurface: 'unsupported', querySyntax: 'plain-keyword' },
-    { searchSurface: ['title'], querySyntax: 'boolean' }, { searchSurface: 'title', querySyntax: 'sql' },
+  it.each([undefined, { searchSurface: 'unsupported', querySyntax: 'plain-keyword', resultOrdering: 'other' },
+    { searchSurface: ['title'], querySyntax: 'boolean', resultOrdering: 'other' }, { searchSurface: 'title', querySyntax: 'sql', resultOrdering: 'other' },
   ])('rejects invalid capabilities before calling the model: %j', (capabilities) => {
     const dependencies: BackgroundDependencies = { storage: { get: vi.fn(), set: vi.fn() }, requestPermission: vi.fn(), fetch: vi.fn() };
     const handler = createMessageHandler(dependencies);
@@ -49,6 +49,7 @@ describe('background message boundary', () => {
       llmApiKey: 'fake-key',
       llmModel: 'model-name',
       searchRequestLimit: 45,
+      intentFilterEnabled: true,
       searchBudgetSeconds: 45,
     };
 
@@ -94,7 +95,7 @@ describe('background message boundary', () => {
       },
     });
 
-    const response = await send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' }, requestId: 'request-1', query: '找高数资料', body: '不得转发' });
+    const response = await send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' }, requestId: 'request-1', query: '找高数资料', body: '不得转发' });
 
     expect(response).toMatchObject({ ok: true, plan: { searches: [{ query: '高数' }] } });
     expect(dependencies.fetch).toHaveBeenCalledOnce();
@@ -122,7 +123,7 @@ describe('background message boundary', () => {
     });
 
     await send({
-      type: 'planner:feedback', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword' },
+      type: 'planner:feedback', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' },
       requestId: 'feedback-1',
       input: { query: '高数', executedSearches: [], newCandidates: [], round: 1 },
     });
@@ -144,7 +145,7 @@ describe('background message boundary', () => {
         })),
       });
 
-      const pending = send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' }, requestId: 'request-timeout', query: '高数' });
+      const pending = send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' }, requestId: 'request-timeout', query: '高数' });
       await vi.advanceTimersByTimeAsync(20_000);
 
       await expect(pending).resolves.toEqual({
@@ -162,7 +163,7 @@ describe('background message boundary', () => {
       fetch: vi.fn(async () => new Response('{"choices":[]}', { status: 200 })),
     });
 
-    await expect(send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' }, requestId: 'request-2', query: '高数' })).resolves.toEqual({
+    await expect(send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' }, requestId: 'request-2', query: '高数' })).resolves.toEqual({
       ok: false,
       error: '模型没有返回文本内容',
       code: 'planner_failed',
@@ -181,7 +182,7 @@ describe('background message boundary', () => {
       }),
     });
 
-    const pending = send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword' }, requestId: 'request-cancel', query: '高数' });
+    const pending = send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' }, requestId: 'request-cancel', query: '高数' });
     await send({ type: 'planner:cancel', requestId: 'request-cancel' });
 
     expect(observedSignal?.aborted).toBe(true);

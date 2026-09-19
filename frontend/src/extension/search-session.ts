@@ -1,9 +1,11 @@
 import type { FeedbackInput } from './planner';
 import { hasExplicitTimeConstraint } from './planner';
 import { folded, normalizeText } from './text';
-import { rankAndFilterCandidates } from './ranking';
+import { rankAndFilterCandidates, type RankedCandidateView } from './ranking';
 import { firstObservedRound, mergeHits } from './retrieval';
 import { createFeedbackInput } from './feedback-payload';
+import { runFinalScreening } from './screening';
+import { PaginationCursorGuard, pagePredatesStart } from './pagination';
 import {
   SourceError,
   type FeedbackPlan,
@@ -29,7 +31,7 @@ export type SearchStopReason =
 
 export interface SearchSnapshot {
   query: string;
-  phase: 'planning' | 'searching' | 'feedback' | 'complete';
+  phase: 'planning' | 'searching' | 'feedback' | 'screening' | 'complete';
   round: number;
   requestsMade: number;
   plan: ModelQueryPlan | null;
@@ -42,12 +44,14 @@ export interface SearchSnapshot {
   planningNotice: string;
   stopReason: SearchStopReason | null;
   statusText: string;
+  screening: 'idle' | 'running' | 'done' | 'failed';
 }
 
 export interface SearchPlanner {
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan>;
   planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan>;
   planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan>;
+  screenResults?(input: import('./types').ScreeningRequestInput, signal?: AbortSignal): Promise<import('./types').ScreeningPlan>;
 }
 
 export interface SearchSessionDependencies {
@@ -55,6 +59,7 @@ export interface SearchSessionDependencies {
   source: SearchSourceSession;
   sleep?: (milliseconds: number) => Promise<void>;
   onUpdate?: (snapshot: SearchSnapshot) => void;
+  intentFilterEnabled?: boolean;
 }
 
 export class SearchSessionError extends Error {
@@ -85,12 +90,14 @@ export class SearchSession {
   private readonly source: SearchSourceSession;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly onUpdate?: (snapshot: SearchSnapshot) => void;
+  private readonly intentFilterEnabled: boolean;
   private controller = new AbortController();
+  private screeningController: AbortController | null = null;
   private requestedStop: SearchStopReason | null = null;
   private snapshot: SearchSnapshot = {
     query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
     activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
-    outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '',
+    outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '', screening: 'idle',
   };
 
   constructor(dependencies: SearchSessionDependencies) {
@@ -98,11 +105,13 @@ export class SearchSession {
     this.source = dependencies.source;
     this.sleep = dependencies.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.onUpdate = dependencies.onUpdate;
+    this.intentFilterEnabled = dependencies.intentFilterEnabled ?? true;
   }
 
   stop(reason: 'user_stopped' | 'replaced' = 'user_stopped'): void {
     this.requestedStop = reason;
     this.controller.abort();
+    if (reason === 'replaced') this.screeningController?.abort();
   }
 
   private publish(patch: Partial<SearchSnapshot> = {}): void {
@@ -110,14 +119,74 @@ export class SearchSession {
     this.onUpdate?.({ ...this.snapshot, results: [...this.snapshot.results] });
   }
 
-  private finish(reason: SearchStopReason, statusText = stopReasonText(reason)): SearchSnapshot {
+  private finishSync(reason: SearchStopReason, statusText = stopReasonText(reason)): SearchSnapshot {
     this.publish({ phase: 'complete', stopReason: reason, statusText });
     return this.snapshot;
+  }
+
+  /**
+   * End path: intent screening runs on normal stops and user stops when it is
+   * enabled and results exist. Zero-result and replaced runs skip it.
+   */
+  private async finish(
+    reason: SearchStopReason,
+    context: { view: RankedCandidateView; entries: RetrievedCandidate[]; query: string },
+    statusText = stopReasonText(reason),
+  ): Promise<SearchSnapshot> {
+    if (reason !== 'replaced' && context.view.results.length > 0 && this.intentFilterEnabled && this.planner.screenResults) {
+      await this.screen(context.view, context.entries, context.query);
+      if (this.requestedStop === 'replaced') return this.finishSync('replaced');
+      this.publish({
+        phase: 'complete',
+        stopReason: reason,
+        statusText: `${statusText} ${this.snapshot.statusText}`,
+      });
+      return this.snapshot;
+    }
+    return this.finishSync(reason, statusText);
+  }
+
+  /**
+   * Multi-batch intent screening: every recalled candidate enters exactly one
+   * batch; removal keys merge only after all batches succeed. Any failure,
+   * timeout, cancellation, or invalid payload discards every suggestion and
+   * keeps the pre-screening list.
+   */
+  private async screen(view: RankedCandidateView, entries: RetrievedCandidate[], query: string): Promise<void> {
+    this.screeningController = new AbortController();
+    try {
+      const outcome = await runFinalScreening({
+        query,
+        candidates: entries.map((entry) => entry.candidate),
+        visibleResults: view.results,
+        signal: this.screeningController.signal,
+        onStart: (batchCount) => this.publish({
+          phase: 'screening', screening: 'running', statusText: `正在筛选 ${entries.length} 条候选，共 ${batchCount} 批。全部成功后统一应用结果…`,
+        }),
+        onProgress: (completedBatchCount, batchCount) => this.publish({
+          phase: 'screening', screening: 'running',
+          statusText: `已完成 ${completedBatchCount}/${batchCount} 批候选筛选。全部成功后统一应用结果…`,
+        }),
+        request: (batch, signal) => this.planner.screenResults!(batch, signal),
+      });
+      if (this.requestedStop === 'replaced') return;
+      this.publish({
+        results: outcome.results,
+        screening: 'done',
+        statusText: `意图筛选完成，移除了 ${outcome.removedCount} 条结果。`,
+      });
+    } catch {
+      if (this.requestedStop === 'replaced') return;
+      this.publish({ phase: 'complete', screening: 'failed', statusText: '意图筛选未完成，已保留筛选前结果。' });
+    } finally {
+      this.screeningController = null;
+    }
   }
 
   async run(query: string, requestLimit: number): Promise<SearchSnapshot> {
     const normalizedQuery = normalizeText(query);
     const enforceTimeRange = hasExplicitTimeConstraint(normalizedQuery);
+    const timeOrderedSource = this.source.capabilities.resultOrdering === 'time-desc';
     const candidates = new Map<string, RetrievedCandidate>();
     const executed = new Map<string, { query: string; hitCount: number }>();
     const inactive = new Set<string>();
@@ -126,6 +195,10 @@ export class SearchSession {
     let searches: PlannedSearch[];
     const { maxSearchCalls, minRequestIntervalMs } = this.source.ratePolicy;
     const maxRequests = Math.min(maxSearchCalls, Math.max(1, Math.round(Number.isFinite(requestLimit) ? requestLimit : 1)));
+    const cursorGuard = new PaginationCursorGuard();
+    let runContext = (): { view: RankedCandidateView; entries: RetrievedCandidate[]; query: string } => ({
+      view: { results: [], outOfRangeCount: 0 }, entries: [...candidates.values()], query: normalizedQuery,
+    });
 
     this.publish({ query: normalizedQuery, phase: 'planning', round, statusText: '正在规划首轮检索词…' });
     try {
@@ -135,17 +208,19 @@ export class SearchSession {
         planningNotice: plan.usedOriginalQueryFallback ? '模型计划无效，已直接搜索原词。' : '',
       });
       searches = plan.searches;
+      const startDate = plan.timeConstraint.startDate;
 
       const candidateView = () => rankAndFilterCandidates([...candidates.values()], plan, enforceTimeRange);
+      runContext = () => ({ view: candidateView(), entries: [...candidates.values()], query: normalizedQuery });
 
       while (true) {
-        if (this.requestedStop) return this.finish(this.requestedStop);
-        if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
+        if (this.requestedStop) return this.finish(this.requestedStop, runContext());
+        if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
         const deduped = searches.filter((search, index, all) => {
           const key = folded(search.query);
           return key && !executed.has(key) && all.findIndex((item) => folded(item.query) === key) === index;
         });
-        if (!deduped.length) return this.finish('no_new_searches');
+        if (!deduped.length) return this.finish('no_new_searches', runContext());
 
         const before = candidateView().results.length;
         const roundHits = new Map(deduped.map((search) => [folded(search.query), 0]));
@@ -157,19 +232,22 @@ export class SearchSession {
         });
 
         while (queue.length) {
-          if (this.requestedStop) return this.finish(this.requestedStop);
-          if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
+          if (this.requestedStop) return this.finish(this.requestedStop, runContext());
+          if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
           const current = queue.shift()!;
           if (this.snapshot.requestsMade > 0) {
             await this.sleep(minRequestIntervalMs);
-            if (this.requestedStop) return this.finish(this.requestedStop);
+            if (this.requestedStop) return this.finish(this.requestedStop, runContext());
           }
           this.publish({ requestsMade: this.snapshot.requestsMade + 1 });
           const page = await this.source.search(current.search.query, current.cursor, this.controller.signal);
           roundHits.set(folded(current.search.query), (roundHits.get(folded(current.search.query)) ?? 0) + page.hits.length);
           mergeHits(candidates, page.hits, current.search.query, round);
           this.publish(candidateView());
-          if (page.nextCursor !== undefined && page.nextCursor !== current.cursor) {
+          // Per-search early stop: a fully-dated page already older than the
+          // start date means later pages only get older on a time-desc source.
+          const exhausted = timeOrderedSource && pagePredatesStart(page, startDate);
+          if (!exhausted && cursorGuard.accepts(folded(current.search.query), current.cursor, page.nextCursor)) {
             queue.push({ search: current.search, cursor: page.nextCursor });
           }
         }
@@ -199,8 +277,8 @@ export class SearchSession {
           round += 1;
           continue;
         }
-        if (view.results.length === 0) return this.finish('no_results');
-        if (newCandidates.length === 0) return this.finish('no_new_candidates');
+        if (view.results.length === 0) return this.finish('no_results', runContext());
+        if (newCandidates.length === 0) return this.finish('no_new_candidates', runContext());
 
         this.publish({ phase: 'feedback', statusText: `正在根据第 ${round} 轮新增候选学习检索词…` });
         const feedback = await this.planner.planFeedback(createFeedbackInput({
@@ -215,21 +293,21 @@ export class SearchSession {
           if (match?.hitCount === 0) inactive.add(match.query);
         });
         this.publish({ learnedTerms: [...learned], inactiveSearches: [...inactive] });
-        if (feedback.shouldStop) return this.finish('model_stop');
+        if (feedback.shouldStop) return this.finish('model_stop', runContext());
         searches = feedback.newSearches;
         round += 1;
       }
     } catch (error) {
-      if (this.requestedStop) return this.finish(this.requestedStop);
-      if (error instanceof SearchSessionError) return this.finish(error.reason, error.message);
+      if (this.requestedStop) return this.finish(this.requestedStop, runContext());
+      if (error instanceof SearchSessionError) return this.finish(error.reason, runContext(), error.message);
       if (error instanceof SourceError) {
         const reason: SearchStopReason = error.code === 'rate_limited' ? 'rate_limited'
           : error.code === 'not_logged_in' ? 'not_logged_in'
           : 'failed';
-        return this.finish(reason, error.message);
+        return this.finish(reason, runContext(), error.message);
       }
       const message = error instanceof Error ? error.message : stopReasonText('failed');
-      return this.finish('failed', message);
+      return this.finish('failed', runContext(), message);
     }
   }
 }

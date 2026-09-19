@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createBackgroundPlanner, mountExtension, Terms, type RuntimeMessenger } from './content';
+import { createBackgroundPlanner, mountExtension, SearchStatus, Terms, type RuntimeMessenger } from './content';
 import type { SearchSnapshot } from './search-session';
 import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } from './types';
 
@@ -12,7 +12,7 @@ import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } fr
 
 describe('extension content UI', () => {
   it('forwards source capabilities for first, blind, and feedback requests', async () => {
-    const capabilities = { searchSurface: 'fulltext', querySyntax: 'plain-keyword' } as const;
+    const capabilities = { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' } as const;
     const requests: ExtensionRequest[] = [];
     const runtime: RuntimeMessenger = {
       send: async <Request extends ExtensionRequest>(message: Request) => {
@@ -39,7 +39,7 @@ describe('extension content UI', () => {
       },
       activeSearches: [], executedSearches: ['计算机网络', '计网'], inactiveSearches: ['计网'],
       learnedTerms: ['网络原理'], results: [], outOfRangeCount: 0,
-      planningNotice: '模型计划无效，已直接搜索原词。', stopReason: 'model_stop', statusText: '完成',
+      planningNotice: '模型计划无效，已直接搜索原词。', stopReason: 'model_stop', statusText: '完成', screening: 'idle',
     };
 
     await act(async () => {
@@ -63,12 +63,34 @@ describe('extension content UI', () => {
       } as ExtensionResponseFor<Request>),
     };
 
-    await expect(createBackgroundPlanner(runtime, { searchSurface: 'title', querySyntax: 'plain-keyword' }).planFeedback({
+    await expect(createBackgroundPlanner(runtime, { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' }).planFeedback({
       query: '高数', executedSearches: [], newCandidates: [], round: 1,
     })).rejects.toMatchObject({
       reason: 'model_timeout',
       message: '反馈模型调用超过 20 秒，已保留当前结果。',
     });
+  });
+
+  it('renders screening progress, success, and failure states', async () => {
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const base: SearchSnapshot = {
+      query: '资料', phase: 'screening', round: 1, requestsMade: 1, plan: null,
+      activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
+      outOfRangeCount: 0, planningNotice: '', stopReason: null,
+      statusText: '已完成 2/7 批候选筛选。全部成功后统一应用结果…', screening: 'running',
+    };
+
+    await act(async () => root.render(<SearchStatus snapshot={base} running onStop={vi.fn()} />));
+    expect(container.textContent).toContain('已完成 2/7 批候选筛选');
+    expect(container.textContent).toContain('全部成功后统一应用结果');
+
+    await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', screening: 'done', statusText: '模型停止。意图筛选完成。' }} running={false} onStop={vi.fn()} />));
+    expect(container.textContent).toContain('意图筛选完成');
+
+    await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', screening: 'failed', statusText: '意图筛选未完成。' }} running={false} onStop={vi.fn()} />));
+    expect(container.querySelector('.status.error')?.textContent).toContain('意图筛选未完成');
+    await act(async () => root.unmount());
   });
 
   it('mounts in Shadow DOM and toggles Scheme A without exposing the API key to page DOM', async () => {
@@ -91,6 +113,7 @@ describe('extension content UI', () => {
       (root.querySelector('[aria-label="打开自然语言搜索"]') as HTMLButtonElement).click();
     });
     expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('false');
+    expect((root.querySelector('[aria-label="自然语言查询"]') as HTMLInputElement).placeholder).toBe('例如：找近两年的操作系统课程的讨论和资料');
 
     await act(async () => {
       (root.querySelector('[data-tab="settings"]') as HTMLButtonElement).click();
@@ -100,6 +123,12 @@ describe('extension content UI', () => {
     expect(root.textContent).toContain('站点检索请求次数上限');
     expect(root.textContent).not.toContain('检索时长');
     expect(root.textContent).toContain('包括分页');
+    const intentFilter = root.querySelector('input[role="switch"]') as HTMLInputElement;
+    expect(intentFilter.checked).toBe(true);
+    expect(intentFilter.getAttribute('aria-labelledby')).toBe('intent-filter-title');
+    expect(intentFilter.getAttribute('aria-describedby')).toBe('intent-filter-description');
+    expect(intentFilter.closest('label')?.textContent).toContain('最终意图筛选');
+    expect(intentFilter.closest('label')?.textContent).toContain('按原始查询移除明显无关的结果');
     expect(document.querySelector('input[type="password"]')).toBeNull();
 
     await act(async () => {

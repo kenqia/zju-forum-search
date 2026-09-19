@@ -14,13 +14,14 @@ import { normalizeText } from '../../text';
 const PAGE_SIZE = 20;
 
 export const CC98_RATE_POLICY: RatePolicy = {
-  maxSearchCalls: 30,
+  maxSearchCalls: 100,
   minRequestIntervalMs: 2000,
 };
 
 export const CC98_CAPABILITIES: SourceCapabilities = {
   searchSurface: 'title',
   querySyntax: 'plain-keyword',
+  resultOrdering: 'time-desc',
 };
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -122,15 +123,20 @@ export class Cc98SourceSession implements SearchSourceSession {
   }
 
   async search(query: string, cursor: string | undefined, signal?: AbortSignal): Promise<SearchPage> {
-    const from = cursor ? Number.parseInt(cursor, 10) : 0;
+    if (cursor !== undefined && !/^\d+$/u.test(cursor)) {
+      throw new SourceError('CC98 分页游标无效。', 'invalid_response');
+    }
+    const from = cursor === undefined ? 0 : Number(cursor);
+    if (!Number.isSafeInteger(from) || from < 0) throw new SourceError('CC98 分页游标无效。', 'invalid_response');
     const payload = await this.client.searchTopics(query, from, PAGE_SIZE, signal);
     const items = topicList(payload);
     const hits = items
       .map((raw, index) => toSearchHit(raw, from + index + 1))
       .filter((hit): hit is SearchHit => hit !== null);
+    // Advance by the actual response length so tail results past a 20-item page are kept.
     return {
       hits,
-      nextCursor: items.length === PAGE_SIZE ? String(from + PAGE_SIZE) : undefined,
+      nextCursor: items.length >= PAGE_SIZE ? String(from + items.length) : undefined,
     };
   }
 }

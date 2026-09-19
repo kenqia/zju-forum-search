@@ -21,7 +21,7 @@ ADR-0004 把搜索定义为「模型规划 → 平台召回 → 本地重排 →
 ### 2. 请求次数上限与 RatePolicy 是两个概念
 
 - 用户请求次数上限：一次搜索允许发出的逻辑 `search()` 调用次数（默认 30，范围 1–100），core 拥有。分页请求同样计入该口径——一次 `search()` 即一次调用；模型调用不计数。
-- `RatePolicy = { maxSearchCalls, minRequestIntervalMs }`：`maxSearchCalls` 是站点侧硬上限兜底，与用户上限取较小者；`minRequestIntervalMs` 是站点请求间的最小间隔。
+- `RatePolicy = { maxSearchCalls, minRequestIntervalMs }`：`maxSearchCalls` 是站点侧硬上限兜底，与用户上限取较小者。当前两个来源均设为 100，使用户配置的 1 至 100 次请求完整生效；`minRequestIntervalMs` 是站点请求间的最小间隔。
 - **分页完全藏进 adapter**：`pageSize` 不进 core policy；`search()` 返回 `SearchPage { hits: SearchHit[], nextCursor?: string }`，cursor 是不透明字符串，offset/cursor/无分页的差异不出 adapter。
 
 ### 3. SearchHit、候选三层模型与 RankingDocument
@@ -66,7 +66,7 @@ UI → sourceRegistry.resolve(location.href)
 
 ## 2026-09-17 接手审查补记
 
-CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17 已落地 registry 与 manifest 契约测试，#18 adapter 与 #19 向导已实现，真实会话验收待完成。#21 起用户控制由时长预算改为请求次数上限，`SearchBudget` 已移除，站点 `maxSearchCalls` 保留为硬上限兜底。详见 [接手审查](../research/search-source-handoff-review.md)。
+CC98 已迁至 `sites/cc98/`，UI 经 registry 创建 session。#15 已落地候选三层模型与 core 反馈白名单；#16 已落地能力提示词与反馈负载文件拆分，#17 已落地 registry 与 manifest 契约测试，#18 adapter 与 #19 向导已实现，真实会话验收待完成。#21 起用户控制由时长预算改为请求次数上限，`SearchBudget` 已移除，站点 `maxSearchCalls` 保留为 100 次安全兜底。详见 [接手审查](../research/search-source-handoff-review.md)。
 
 用户已确认继续沿用正文不出域约定。朵朵 `content` 可作为本地展示标题和 RankingDocument.snippet，但必须标记 `titleOrigin: body-derived`，反馈中的 title 为空。没有原生标题时，模型仅能依据查询、检索命中数与其他允许的元数据决定后续搜索，不能从正文学习词汇。#16 的提示词应如实说明这一限制。
 

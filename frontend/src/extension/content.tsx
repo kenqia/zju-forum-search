@@ -5,7 +5,7 @@ import panelCss from './panel.css?inline';
 import { sourceRegistry } from './source-registry';
 import type { FeedbackInput } from './planner';
 import { SearchSession, SearchSessionError, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings } from './types';
+import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings, type ScreeningPlan, type ScreeningRequestInput } from './types';
 
 export interface RuntimeMessenger {
   send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
@@ -65,6 +65,13 @@ class BackgroundPlanner implements SearchPlanner {
     if (!response.ok) throw responseError(response, '反馈模型调用超过 20 秒，已保留当前结果。');
     return response.feedback;
   }
+  private async requestScreening(input: ScreeningRequestInput, signal?: AbortSignal): Promise<ScreeningPlan> {
+    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
+    const response = await this.withCancellation(this.runtime.send({ type: 'planner:screen', requestId, input, capabilities: this.capabilities }), requestId, signal);
+    if (!response.ok) throw responseError(response, '筛选模型调用超过 20 秒，已保留当前结果。');
+    return response.screening;
+  }
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
     return this.requestPlan('planner:first', query, signal);
   }
@@ -73,6 +80,9 @@ class BackgroundPlanner implements SearchPlanner {
   }
   planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
     return this.requestFeedback(input, signal);
+  }
+  screenResults(input: ScreeningRequestInput, signal?: AbortSignal): Promise<ScreeningPlan> {
+    return this.requestScreening(input, signal);
   }
 }
 
@@ -83,7 +93,7 @@ export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities:
 const EMPTY_SNAPSHOT: SearchSnapshot = {
   query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
   activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
-  outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。',
+  outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。', screening: 'idle',
 };
 
 function SettingsPanel({ runtime, settings, onSettings }: {
@@ -125,6 +135,22 @@ function SettingsPanel({ runtime, settings, onSettings }: {
       <label>站点检索请求次数上限
         <input type="number" min="1" max="100" value={draft.searchRequestLimit} onChange={(event) => setDraft({ ...draft, searchRequestLimit: Number(event.target.value) })} required />
       </label>
+      <label className="toggle-setting">
+        <span className="toggle-copy">
+          <span className="toggle-title" id="intent-filter-title">最终意图筛选</span>
+          <span className="toggle-description" id="intent-filter-description">搜索结束后，让模型按原始查询移除明显无关的结果。</span>
+        </span>
+        <input
+          className="toggle-input"
+          type="checkbox"
+          role="switch"
+          aria-labelledby="intent-filter-title"
+          aria-describedby="intent-filter-description"
+          checked={draft.intentFilterEnabled}
+          onChange={(event) => setDraft({ ...draft, intentFilterEnabled: event.target.checked })}
+        />
+        <span className="toggle-control" aria-hidden="true" />
+      </label>
       <p className="hint">每次站点搜索请求都计入上限，包括分页；模型调用不计入。</p>
       <div className="settings-actions">
         <p className="hint">保存时只申请该 base URL 所在主机。</p>
@@ -159,6 +185,17 @@ interface SearchController {
   runId: number;
 }
 
+export function SearchStatus({ snapshot, running, onStop }: {
+  snapshot: SearchSnapshot;
+  running: boolean;
+  onStop(): void;
+}) {
+  return <>
+    <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' || snapshot.screening === 'failed' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
+    {running && <div className="run-actions"><button className="secondary" type="button" onClick={onStop}>停止并查看结果</button></div>}
+  </>;
+}
+
 function SearchPanel({ runtime, settings, state, onState, controller }: {
   runtime: RuntimeMessenger;
   settings: ExtensionSettings;
@@ -186,6 +223,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
       const nextSession = new SearchSession({
         planner: createBackgroundPlanner(runtime, source.capabilities),
         source,
+        intentFilterEnabled: settings.intentFilterEnabled,
         onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
       });
       controller.session = nextSession;
@@ -209,8 +247,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
       <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：找近两年的操作系统课程的讨论和资料" aria-label="自然语言查询" required />
       <button className="primary">{running ? '开始新搜索' : '开始搜索'}</button>
     </form>
-    <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
-    {running && <div className="run-actions"><button className="secondary" type="button" onClick={stop}>停止并查看结果</button></div>}
+    <SearchStatus snapshot={snapshot} running={running} onStop={stop} />
     {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
     {snapshot.outOfRangeCount > 0 && <p className="filtered-count">另有 {snapshot.outOfRangeCount} 条范围外结果已忽略。</p>}
     <div aria-live="polite">

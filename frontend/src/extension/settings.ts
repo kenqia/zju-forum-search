@@ -6,6 +6,8 @@ const MIN_REQUEST_LIMIT = 1;
 const MAX_REQUEST_LIMIT = 100;
 
 function clampedCount(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value === 'string' && !value.trim()) return fallback;
+  if (typeof value !== 'string' && typeof value !== 'number') return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.round(parsed)));
@@ -35,6 +37,7 @@ export function normalizeSettings(value: Partial<ExtensionSettings>): ExtensionS
     llmApiKey: String(value.llmApiKey ?? '').trim(),
     llmModel: String(value.llmModel ?? '').trim(),
     searchRequestLimit: clampedCount(value.searchRequestLimit ?? DEFAULT_SETTINGS.searchRequestLimit, MIN_REQUEST_LIMIT, MAX_REQUEST_LIMIT, DEFAULT_SETTINGS.searchRequestLimit),
+    intentFilterEnabled: typeof value.intentFilterEnabled === 'boolean' ? value.intentFilterEnabled : DEFAULT_SETTINGS.intentFilterEnabled,
     searchBudgetSeconds: clampedCount(budget, MIN_BUDGET_SECONDS, MAX_BUDGET_SECONDS, DEFAULT_SETTINGS.searchBudgetSeconds),
   };
 }

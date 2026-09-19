@@ -10,9 +10,13 @@ describe('Duo through the unchanged search core', () => {
     const messages: { role: string; content: string }[][] = [];
     const planner = new PlannerClient({ chatCompletions: async (_settings, input) => {
       messages.push(input);
-      return messages.length === 1
-        ? JSON.stringify({ searches: ['校园合成词'], required_concepts: [{ name: '课程', expressions: ['微积分'] }] })
-        : JSON.stringify({ new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
+      if (messages.length === 1) {
+        return JSON.stringify({ searches: ['校园合成词'], required_concepts: [{ name: '课程', expressions: ['微积分'] }] });
+      }
+      if (messages.length === 2) {
+        return JSON.stringify({ new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
+      }
+      return JSON.stringify({ remove_keys: [] });
     } }, DEFAULT_SETTINGS, DUO_CAPABILITIES);
     const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
       const receiver = receiveEnvelope(String(init?.body));
@@ -27,7 +31,7 @@ describe('Duo through the unchanged search core', () => {
     expect(result.results.map((item) => item.id)).toEqual(['2', '1']);
     expect(result.results[0].url).toBe('https://www.duoduo.link/a/2');
     expect(fetch).toHaveBeenCalledOnce();
-    expect(messages).toHaveLength(2);
+    expect(messages).toHaveLength(3);
     expect(messages[0][0].content).toContain('匹配全文');
     expect(JSON.parse(messages[1][1].content).new_candidates).toEqual([
       { title: '', author: '作者甲', board: '', time: '', reply_count: 0 },

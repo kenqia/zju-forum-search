@@ -1,19 +1,9 @@
-import type { Candidate, FeedbackEvidence, FeedbackRequestInput } from './types';
+import type { Candidate, FeedbackRequestInput } from './types';
+import { MODEL_TITLE_LIMIT, modelMetadata, modelMetadataPayload } from './model-metadata';
 
-export const FEEDBACK_TITLE_LIMIT = 80;
+export const FEEDBACK_TITLE_LIMIT = MODEL_TITLE_LIMIT;
 export const FEEDBACK_CANDIDATE_LIMIT = 160;
 export const FEEDBACK_METADATA_BYTE_LIMIT = 4000;
-
-function evidence(candidate: Candidate): FeedbackEvidence {
-  return {
-    // Missing or unrecognised provenance is never permission to send a title.
-    title: candidate.titleOrigin === 'native' ? candidate.title.slice(0, FEEDBACK_TITLE_LIMIT) : '',
-    ...(candidate.author !== undefined && { author: candidate.author.slice(0, 80) }),
-    ...(candidate.publishedAt !== undefined && { publishedAt: candidate.publishedAt.slice(0, 40) }),
-    ...(candidate.section !== undefined && { section: candidate.section.slice(0, 80) }),
-    ...(candidate.replyCount !== undefined && Number.isFinite(candidate.replyCount) && { replyCount: candidate.replyCount }),
-  };
-}
 
 /** Construct the only candidate representation allowed across the planner port. */
 export function createFeedbackInput(
@@ -29,7 +19,7 @@ export function createFeedbackInput(
     if (!fits()) { result.executedSearches.pop(); break; }
   }
   for (const candidate of input.newCandidates.slice(0, FEEDBACK_CANDIDATE_LIMIT)) {
-    result.newCandidates.push(evidence(candidate));
+    result.newCandidates.push(modelMetadata(candidate));
     if (!fits()) { result.newCandidates.pop(); break; }
   }
   return result;
@@ -53,14 +43,7 @@ export function buildFeedbackPayload(input: FeedbackRequestInput, currentDate?: 
     }
   }
   for (const candidate of input.newCandidates.slice(0, FEEDBACK_CANDIDATE_LIMIT)) {
-    const approved = {
-      title: candidate.title.slice(0, FEEDBACK_TITLE_LIMIT),
-      author: (candidate.author ?? '').slice(0, 80),
-      board: (candidate.section ?? '').slice(0, 80),
-      time: (candidate.publishedAt ?? '').slice(0, 40),
-      reply_count: candidate.replyCount ?? 0,
-    };
-    payload.new_candidates.push(approved);
+    payload.new_candidates.push(modelMetadataPayload(candidate));
     if (encoder.encode(JSON.stringify(payload)).byteLength > FEEDBACK_METADATA_BYTE_LIMIT) {
       payload.new_candidates.pop();
       break;

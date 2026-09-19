@@ -49,7 +49,9 @@ function isSourceCapabilities(value: unknown): value is SourceCapabilities {
   return typeof capabilities.searchSurface === 'string'
     && ['title', 'fulltext', 'mixed'].includes(capabilities.searchSurface)
     && typeof capabilities.querySyntax === 'string'
-    && ['plain-keyword', 'boolean'].includes(capabilities.querySyntax);
+    && ['plain-keyword', 'boolean'].includes(capabilities.querySyntax)
+    && typeof capabilities.resultOrdering === 'string'
+    && ['time-desc', 'other'].includes(capabilities.resultOrdering);
 }
 
 function isExtensionRequest(message: unknown): message is ExtensionRequest {
@@ -62,6 +64,9 @@ function isExtensionRequest(message: unknown): message is ExtensionRequest {
     return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && typeof value.query === 'string';
   }
   if (value.type === 'planner:feedback') {
+    return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object';
+  }
+  if (value.type === 'planner:screen') {
     return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object';
   }
   return false;
@@ -178,8 +183,10 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
           sendResponse({ ok: true, plan: await planner.planFirstRound(request.query, plannerController!.signal) });
         } else if (type === 'planner:blind') {
           sendResponse({ ok: true, plan: await planner.planBlindExpansion(request.query, plannerController!.signal) });
-        } else {
+        } else if (type === 'planner:feedback') {
           sendResponse({ ok: true, feedback: await planner.planFeedback(request.input as FeedbackInput, plannerController!.signal) });
+        } else {
+          sendResponse({ ok: true, screening: await planner.screenResults(request.input as import('./types').ScreeningRequestInput, plannerController!.signal) });
         }
         plannerControllers.delete(request.requestId);
       } catch (error) {

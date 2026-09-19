@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { duoAdapter, readDuoToken, DuoSourceSession } from './index';
+import { DUO_RATE_POLICY, duoAdapter, readDuoToken, DuoSourceSession } from './index';
 import { receiveEnvelope, testPublicKey } from './test-server';
 import { createFeedbackInput } from '../../feedback-payload';
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Duo login boundary', () => {
+  it('allows the full user-configurable request range', () => {
+    expect(DUO_RATE_POLICY.maxSearchCalls).toBe(100);
+  });
+
   it.each([null, '{', 'null', '[]', '{}', '{"token":42}', '{"token":"  "}'])('rejects missing or malformed auth-store: %s', (stored) => {
     vi.stubGlobal('localStorage', { getItem: () => stored });
     expect(() => duoAdapter.createSession({ url: 'https://www.duoduo.link/' })).toThrow(expect.objectContaining({ code: 'not_logged_in' }));

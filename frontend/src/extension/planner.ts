@@ -1,6 +1,7 @@
 import { buildFeedbackPayload } from './feedback-payload';
+import { assertScreeningShape, buildScreeningPayload, normalizeScreeningPlan } from './screening';
 import { folded, normalizeText } from './text';
-import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, ModelQueryPlan, PlannedSearch, SourceCapabilities, TimeConstraint } from './types';
+import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, ModelQueryPlan, PlannedSearch, ScreeningPlan, ScreeningRequestInput, SourceCapabilities, TimeConstraint } from './types';
 
 export interface PlannerTransport {
   chatCompletions(settings: ExtensionSettings, messages: { role: string; content: string }[], signal?: AbortSignal): Promise<string>;
@@ -32,21 +33,35 @@ const CHINESE_DIGITS: Record<string, number> = { 零: 0, 〇: 0, 一: 1, 二: 2,
 function parseLocalCount(text: string): number | null {
   const value = normalizeText(text);
   if (!value) return null;
-  if (/^\d+$/u.test(value)) return Number.parseInt(value, 10);
-  if (value === '半') return null;
-  if (value === '十') return 10;
-  const parts = value.split('十');
-  if (parts.length === 2 && parts.every((part) => part === '' || CHINESE_DIGITS[part] !== undefined)) {
-    const tens = parts[0] === '' ? 1 : CHINESE_DIGITS[parts[0]];
-    const ones = parts[1] === '' ? 0 : CHINESE_DIGITS[parts[1]];
-    return tens * 10 + ones;
+  if (/^\d+$/u.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
   }
-  if (value.length === 1 && CHINESE_DIGITS[value] !== undefined) return CHINESE_DIGITS[value];
-  return null;
+  if (value === '半') return null;
+  if (![...value].every((character) => CHINESE_DIGITS[character] !== undefined || character === '十' || character === '百')) return null;
+  if (!/[十百]/u.test(value)) {
+    const parsed = Number([...value].map((character) => CHINESE_DIGITS[character]).join(''));
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  let total = 0;
+  let pending: number | null = null;
+  let previousUnit = Infinity;
+  for (const character of value) {
+    if (CHINESE_DIGITS[character] !== undefined) {
+      pending = CHINESE_DIGITS[character];
+      continue;
+    }
+    const unit = character === '百' ? 100 : 10;
+    if (unit >= previousUnit) return null;
+    total += (pending ?? 1) * unit;
+    pending = null;
+    previousUnit = unit;
+  }
+  return total + (pending ?? 0);
 }
 
 function isoOf(date: Date): string {
-  const year = date.getFullYear();
+  const year = String(date.getFullYear()).padStart(4, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
@@ -293,6 +308,15 @@ ${sourceInstructions(capabilities)}
 }`;
 }
 
+export function screeningSystemPrompt(): string {
+  return `你是搜索结果意图筛选器。输入是用户的原始查询和一批候选主题帖的白名单元数据（临时键、原生标题、作者、发布时间、板块、回复数）。
+判断哪些候选与查询意图明显无关。正文、回帖、命中片段、平台 ID 和 URL 都不会提供；正文派生标题为空时只能依据元数据判断，不得推测正文。
+只返回确实要移除的候选的临时键；拿不准的一律保留。
+
+返回 JSON：
+{ "remove_keys": ["要移除的候选临时键"] }`;
+}
+
 export type FeedbackInput = FeedbackRequestInput;
 
 export function buildFeedbackMessages(input: FeedbackInput, capabilities: SourceCapabilities, currentDate?: string): { role: string; content: string }[] {
@@ -343,5 +367,15 @@ export class PlannerClient {
       },
     ], signal);
     return modelPlanFromContent(content, query, this.today);
+  }
+
+  async screenResults(input: ScreeningRequestInput, signal?: AbortSignal): Promise<ScreeningPlan> {
+    const content = await this.transport.chatCompletions(this.settings, [
+      { role: 'system', content: screeningSystemPrompt() },
+      { role: 'user', content: JSON.stringify(buildScreeningPayload(input)) },
+    ], signal);
+    const raw = parseJson(content);
+    assertScreeningShape(raw);
+    return normalizeScreeningPlan(raw, new Set(input.candidates.map((candidate) => candidate.key)));
   }
 }

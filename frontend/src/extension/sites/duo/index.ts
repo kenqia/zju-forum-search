@@ -8,9 +8,9 @@ const SEARCH_API_ID = 'd15476adc9b4d5f46125c3d8c420c556';
 const LOGIN_MESSAGE = '请先登录朵朵校友圈，然后刷新页面再试。';
 const LIMIT_MESSAGE = '朵朵校友圈暂时限制了搜索请求，请在原站完成验证后再试，已有结果已保留。';
 
-export const DUO_CAPABILITIES: SourceCapabilities = { searchSurface: 'fulltext', querySyntax: 'plain-keyword' };
+export const DUO_CAPABILITIES: SourceCapabilities = { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' };
 // Initial policy from #18, not a measured server-side rate limit.
-export const DUO_RATE_POLICY: RatePolicy = { maxSearchCalls: 30, minRequestIntervalMs: 500 };
+export const DUO_RATE_POLICY: RatePolicy = { maxSearchCalls: 100, minRequestIntervalMs: 500 };
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 interface DuoOptions {

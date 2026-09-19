@@ -4,9 +4,27 @@ import { describe, expect, it } from 'vitest';
 import { buildFeedbackMessages, localRelativeTimeRange, normalizeModelPlan, PlannerClient, PlannerError } from './planner';
 import { DEFAULT_SETTINGS, type SourceCapabilities, type FeedbackEvidence } from './types';
 
-const capabilities: SourceCapabilities = { searchSurface: 'title', querySyntax: 'plain-keyword' };
+const capabilities: SourceCapabilities = { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' };
 
 describe('PlannerClient', () => {
+  it('accepts only valid temporary keys from the screening protocol', async () => {
+    let wirePayload: Record<string, unknown> = {};
+    const client = new PlannerClient({ chatCompletions: async (_settings, messages) => {
+      wirePayload = JSON.parse(messages[1].content);
+      return JSON.stringify({ remove_keys: ['r0', 'unknown', 'r0'] });
+    } }, DEFAULT_SETTINGS, capabilities);
+
+    await expect(client.screenResults({ query: '资料', candidates: [{ key: 'r0', title: '高数资料', author: '作者' }] })).resolves.toEqual({ removeKeys: ['r0'] });
+    expect(wirePayload).toEqual({ query: '资料', candidates: [{ key: 'r0', title: '高数资料', author: '作者', board: '', time: '', reply_count: 0 }] });
+  });
+
+  it.each([
+    {}, { remove_keys: 'r0' }, { remove_keys: [1] }, { remove_keys: [], reasoning: 'extra' },
+  ])('rejects an invalid screening response: %j', async (response) => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify(response) }, DEFAULT_SETTINGS, capabilities);
+    await expect(client.screenResults({ query: '资料', candidates: [{ key: 'r0', title: '资料' }] })).rejects.toThrow('模型返回的筛选结构无效');
+  });
+
   it.each([
     ['title', 'plain-keyword'], ['fulltext', 'plain-keyword'], ['mixed', 'plain-keyword'], ['mixed', 'boolean'],
   ] as const)('uses %s / %s capabilities in every planning round', async (searchSurface, querySyntax) => {
@@ -14,7 +32,7 @@ describe('PlannerClient', () => {
     const client = new PlannerClient({ chatCompletions: async (_settings, messages) => {
       prompts.push(messages[0].content);
       return JSON.stringify({ searches: ['高数'], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
-    } }, DEFAULT_SETTINGS, { searchSurface, querySyntax });
+    } }, DEFAULT_SETTINGS, { searchSurface, querySyntax, resultOrdering: 'time-desc' });
     await client.planFirstRound('高数');
     await client.planBlindExpansion('高数');
     await client.planFeedback({ query: '高数', executedSearches: [], newCandidates: [], round: 1 });
@@ -185,8 +203,10 @@ describe('local relative time resolution', () => {
     ['最近两周的帖子', '2026-09-19', { startDate: '2026-09-06', endDate: '2026-09-19' }],
     ['近两个月的资料', '2026-09-19', { startDate: '2026-07-19', endDate: '2026-09-19' }],
     ['近两年的操作系统资料', '2026-09-19', { startDate: '2024-09-19', endDate: '2026-09-19' }],
+    ['近一百天的资料', '2026-09-19', { startDate: '2026-06-12', endDate: '2026-09-19' }],
     ['最近 1 个月', '2026-01-31', { startDate: '2025-12-31', endDate: '2026-01-31' }],
     ['近 1 年', '2025-03-01', { startDate: '2024-03-01', endDate: '2025-03-01' }],
+    ['近 1 年', '2024-02-29', { startDate: '2023-02-28', endDate: '2024-02-29' }],
     ['近 3 个月', '2026-05-31', { startDate: '2026-02-28', endDate: '2026-05-31' }],
   ] as const)('resolves %s on %s', (query, today, expected) => {
     expect(localRelativeTimeRange(query, today)).toMatchObject(expected);

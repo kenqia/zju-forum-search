@@ -38,7 +38,7 @@
 
 ## 限流
 
-- 未见显式 rate limit 文档或 429；`needCode` 字段暗示服务端风控门槛（高频可能置 true）。前端搜索无本地节流。前次建议 `ratePolicy` 为 `maxSearchCalls:30, minRequestIntervalMs:500`；500ms 尚无阈值证据，不能称为已验证的保守值；`status===10000` → `not_logged_in`，`needCode===true` → `rate_limited`。
+- 未见显式 rate limit 文档或 429；`needCode` 字段暗示服务端风控门槛（高频可能置 true）。前端搜索无本地节流。当前 `ratePolicy` 使用 `maxSearchCalls:100, minRequestIntervalMs:500`，让用户配置的 1 至 100 次请求完整生效；500ms 尚无阈值证据，不能称为已验证的保守值；`status===10000` → `not_logged_in`，`needCode===true` → `rate_limited`。
 
 ## 与 ADR-0005 端口适配要点
 
