@@ -64,6 +64,16 @@ planner 的首轮、盲扩展和反馈提示词由 `SourceCapabilities` 生成�
 
 新增 adapter 时，在 `source-registry.ts` 注册，并将其 `pageMatches` 和 `apiHosts` 分别登记到 manifest 的 `content_scripts.matches` 与 `host_permissions`。运行 `cd frontend && npm test -- src/extension/source-manifest.test.ts` 检查所有已注册源的权限是否齐全。测试按声明的模式字符串检查包含关系，允许 manifest 保留额外的模型端点权限；不解析更宽通配符是否等价覆盖。
 
+## 检索波次手动验收
+
+Issue #25 的浏览器验收向导覆盖设置、真实请求顺序、软隔离、反馈负载和朵朵冒烟。它不会读取或保存 API key、登录态、请求内容或模型响应。
+
+```bash
+bash frontend/scripts/issue-25-acceptance-wizard.sh
+```
+
+不可稳定触发的重判、失败回退和精确负载上限由自动测试验收。向导会明确指出这些边界，不要求为了复现分支高频请求站点或模型。
+
 ## 朵朵手动验收
 
 ```bash
