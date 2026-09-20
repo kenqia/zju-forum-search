@@ -307,11 +307,10 @@ export class SearchSession {
           statusText: `第 ${round} 个检索波次完成。`,
         });
 
-        if (this.snapshot.requestsMade >= maxRequests) {
-          return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
-        }
-
         if (firstWave && view.results.length === 0 && !blindExpanded) {
+          if (this.snapshot.requestsMade >= maxRequests) {
+            return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
+          }
           this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });
           const blind = await this.planner.planBlindExpansion(normalizedQuery, this.controller.signal);
           blindExpanded = true;
@@ -321,13 +320,16 @@ export class SearchSession {
           continue;
         }
         firstWave = false;
-        if (view.results.length === 0) return this.finish('no_results', runContext());
+        if (view.results.length === 0 && view.softIsolatedResults.length === 0) return this.finish('no_results', runContext());
 
         const evidenceChanged = [...candidates.values()].some((entry) => (entry.evidenceRevision ?? 0) > (beforeEvidence.get(entry.candidate.id) ?? 0));
         const selected = evidenceChanged
           ? selectFeedbackEvidence([...candidates.values()], view.rankedIds, maxEvidence)
           : { entries: [], candidates: [] };
         if (!selected.candidates.length) {
+          if (this.snapshot.requestsMade >= maxRequests) {
+            return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
+          }
           if (!pendingFirstPages.length && !continuations.size) return this.finish('no_new_candidates', runContext());
           round += 1;
           continue;
@@ -339,9 +341,8 @@ export class SearchSession {
           executedSearches: [...executed.values()],
           candidates: selected.candidates,
         }), this.controller.signal);
-        applyFeedbackJudgments(selected.entries, feedback.judgments ?? []);
-        const mayExpand = feedback.judgments === undefined
-          || (feedback.judgments ?? []).some((judgment) => judgment.grade === 2 || judgment.grade === 3);
+        applyFeedbackJudgments(selected.entries, feedback.judgments);
+        const mayExpand = feedback.judgments.some((judgment) => judgment.grade === 2 || judgment.grade === 3);
         if (mayExpand) feedback.learnedTerms.forEach((term) => learned.add(term));
         feedback.stopSuggestions.forEach((suggestion) => {
           const match = executed.get(folded(suggestion));
@@ -354,6 +355,9 @@ export class SearchSession {
           outOfRangeCount: judgedView.outOfRangeCount,
           learnedTerms: [...learned], inactiveSearches: [...inactive],
         });
+        if (this.snapshot.requestsMade >= maxRequests) {
+          return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
+        }
         if (feedback.shouldStop) return this.finish('model_stop', runContext());
         if (mayExpand) enqueueFirstPages(feedback.newSearches);
         round += 1;

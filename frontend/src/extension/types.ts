@@ -151,7 +151,7 @@ export interface SearchSourceAdapter {
 export type FeedbackSearch = PlannedSearch;
 
 export interface FeedbackPlan {
-  judgments?: FeedbackJudgment[];
+  judgments: FeedbackJudgment[];
   newSearches: FeedbackSearch[];
   learnedTerms: string[];
   stopSuggestions: string[];

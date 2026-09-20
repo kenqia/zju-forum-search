@@ -31,7 +31,7 @@ describe('PlannerClient', () => {
     const prompts: string[] = [];
     const client = new PlannerClient({ chatCompletions: async (_settings, messages) => {
       prompts.push(messages[0].content);
-      return JSON.stringify({ searches: ['高数'], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
+      return JSON.stringify({ searches: ['高数'], judgments: [], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
     } }, DEFAULT_SETTINGS, { searchSurface, querySyntax, resultOrdering: 'time-desc' });
     await client.planFirstRound('高数');
     await client.planBlindExpansion('高数');
@@ -56,7 +56,7 @@ describe('PlannerClient', () => {
         summary: '近三年微积分资料', searches: [{ query: '高数', purpose: '' }], required_concepts: [], excluded_terms: [],
         time_constraint: { expression: '近三年', start_date: '2023-09-15', end_date: '2026-09-15' },
       }),
-      JSON.stringify({ new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '足够' }),
+      JSON.stringify({ judgments: [], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '足够' }),
     ];
     const client = new PlannerClient({
       chatCompletions: async (_settings, messages) => {

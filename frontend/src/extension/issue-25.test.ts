@@ -125,6 +125,54 @@ describe('issue #25 retrieval waves', () => {
     expect(result.stopReason).toBe('no_new_candidates');
   });
 
+  it('rejudges and restores the only candidate when later metadata changes after grade 0', async () => {
+    const planner = {
+      planFirstRound: async () => plan,
+      planBlindExpansion: vi.fn(),
+      planFeedback: vi.fn()
+        .mockImplementationOnce(async (input: FeedbackRequestInput) => ({
+          judgments: [{ key: input.candidates[0].key, grade: 0 as const }],
+          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '',
+        }))
+        .mockImplementationOnce(async (input: FeedbackRequestInput) => ({
+          judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
+          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+        })),
+    };
+    const source = {
+      sourceId: 'cc98', ratePolicy: { maxSearchCalls: 10, minRequestIntervalMs: 0 },
+      capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } as const,
+      search: vi.fn(async (_query: string, cursor?: string) => cursor
+        ? { hits: [hit('only', '更新后的标题', 2)] }
+        : { hits: [hit('only', '原始标题', 1)], nextCursor: 'p2' }),
+    };
+
+    const result = await new SearchSession({ planner, source, sleep: async () => undefined, intentFilterEnabled: false }).run('资料', 10, 30);
+
+    expect(planner.planFeedback).toHaveBeenCalledTimes(2);
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['only']);
+    expect(result.softIsolatedResults).toEqual([]);
+  });
+
+  it('completes feedback after a full wave even when that wave reaches the site request limit', async () => {
+    const planFeedback = vi.fn(async (input: FeedbackRequestInput) => ({
+      judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
+      newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '',
+    }));
+    const result = await new SearchSession({
+      planner: { planFirstRound: async () => plan, planBlindExpansion: vi.fn(), planFeedback },
+      source: {
+        sourceId: 'cc98', ratePolicy: { maxSearchCalls: 10, minRequestIntervalMs: 0 },
+        capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } as const,
+        search: async () => ({ hits: [hit('one')] }),
+      },
+      sleep: async () => undefined, intentFilterEnabled: false,
+    }).run('资料', 1, 30);
+
+    expect(planFeedback).toHaveBeenCalledOnce();
+    expect(result.stopReason).toBe('request_limit');
+  });
+
   it('stops on feedback failure, keeps active results, and does not call the final model stage', async () => {
     const screenResults = vi.fn(async () => ({ removeKeys: [] }));
     const session = new SearchSession({

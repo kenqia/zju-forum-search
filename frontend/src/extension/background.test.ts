@@ -118,7 +118,7 @@ describe('background message boundary', () => {
     const { dependencies, send } = harness({
       fetch: vi.fn(async () => new Response(JSON.stringify({
         choices: [{ message: { content: JSON.stringify({
-          new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '结果足够',
+          judgments: [], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '结果足够',
         }) } }],
       }), { status: 200, headers: { 'content-type': 'application/json' } })),
     });

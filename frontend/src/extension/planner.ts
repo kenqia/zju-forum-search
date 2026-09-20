@@ -223,7 +223,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assertFeedbackShape(value: unknown): asserts value is Record<string, unknown> {
   if (!isRecord(value)
-    || (value.judgments !== undefined && !Array.isArray(value.judgments))
+    || !Array.isArray(value.judgments)
     || !Array.isArray(value.new_searches)
     || !value.new_searches.every((item) => isRecord(item) && typeof item.query === 'string' && typeof item.purpose === 'string')
     || (value.learned_terms !== undefined && (!Array.isArray(value.learned_terms) || !value.learned_terms.every((term) => typeof term === 'string')))

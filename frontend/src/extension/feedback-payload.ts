@@ -1,10 +1,20 @@
 import { modelMetadataPayload } from './model-metadata';
+import { folded } from './text';
 import type { FeedbackCandidate, FeedbackRequestInput } from './types';
 
 export const FEEDBACK_CANDIDATE_LIMIT = 100;
 export const FEEDBACK_METADATA_BYTE_LIMIT = 4000;
 
 function sanitizedCandidate(candidate: FeedbackCandidate): FeedbackCandidate {
+  const matchedQueries: string[] = [];
+  const seenQueries = new Set<string>();
+  for (let index = candidate.matchedQueries.length - 1; index >= 0 && matchedQueries.length < 3; index -= 1) {
+    const query = candidate.matchedQueries[index].slice(0, 120);
+    const key = folded(query);
+    if (!key || seenQueries.has(key)) continue;
+    seenQueries.add(key);
+    matchedQueries.unshift(query);
+  }
   return {
     key: candidate.key.slice(0, 40),
     title: candidate.title.slice(0, 80),
@@ -12,7 +22,7 @@ function sanitizedCandidate(candidate: FeedbackCandidate): FeedbackCandidate {
     ...(candidate.publishedAt !== undefined && { publishedAt: candidate.publishedAt.slice(0, 40) }),
     ...(candidate.section !== undefined && { section: candidate.section.slice(0, 80) }),
     ...(candidate.replyCount !== undefined && Number.isFinite(candidate.replyCount) && { replyCount: candidate.replyCount }),
-    matchedQueries: candidate.matchedQueries.slice(-3).map((query) => query.slice(0, 120)),
+    matchedQueries,
   };
 }
 

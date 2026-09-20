@@ -14,7 +14,7 @@ describe('Duo through the unchanged search core', () => {
         return JSON.stringify({ searches: ['校园合成词'], required_concepts: [{ name: '课程', expressions: ['微积分'] }] });
       }
       if (messages.length === 2) {
-        return JSON.stringify({ new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
+        return JSON.stringify({ judgments: [], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
       }
       return JSON.stringify({ remove_keys: [] });
     } }, DEFAULT_SETTINGS, DUO_CAPABILITIES);

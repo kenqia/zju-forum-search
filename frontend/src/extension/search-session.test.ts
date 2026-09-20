@@ -54,6 +54,7 @@ describe('SearchSession', () => {
         .mockImplementationOnce(async (input) => {
           firstFeedbackInput = input;
           return {
+            judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
             newSearches: [{ query: '工科数学分析', purpose: '标题学到的叫法' }],
             learnedTerms: ['工科数学分析'],
             stopSuggestions: ['微积分'],
@@ -61,13 +62,11 @@ describe('SearchSession', () => {
             reasoning: '继续',
           };
         })
-        .mockResolvedValueOnce({
+        .mockImplementationOnce(async (input) => ({
+          judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
           newSearches: [{ query: '无人使用的扩展词', purpose: '验证枯竭' }],
-          learnedTerms: [],
-          stopSuggestions: [],
-          shouldStop: false,
-          reasoning: '再试一次',
-        }),
+          learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '再试一次',
+        })),
       planBlindExpansion: vi.fn(),
     };
     const calls: Array<[string, number, number]> = [];
@@ -159,7 +158,7 @@ describe('SearchSession', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => initialPlan,
-        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(vi.fn(async (query) => [{ id: query, title: query }])),
@@ -288,7 +287,7 @@ describe('SearchSession', () => {
         planFirstRound: async () => timedPlan,
         planFeedback: async (input) => {
           feedbackCandidates = input.candidates;
-          return { newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' };
+          return { judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' };
         },
         planBlindExpansion: vi.fn(),
       },
@@ -313,7 +312,7 @@ describe('SearchSession', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => untimedPlan,
-        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(vi.fn(async () => [
@@ -339,7 +338,7 @@ describe('SearchSession', () => {
           searches: [{ query: '微积分', purpose: '模型计划无效，直接使用用户原词' }],
           usedOriginalQueryFallback: true,
         }),
-        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(searchTopics),
@@ -429,7 +428,7 @@ describe('retrieved candidate documents', () => {
           searches: [{ query: '第一词', purpose: '' }, { query: '第二词', purpose: '' }],
           requiredConcepts: [{ name: 'A', expressions: ['alpha'] }, { name: 'B', expressions: ['beta'] }],
         }),
-        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
       },
       sleep: async () => undefined,
@@ -443,7 +442,7 @@ describe('retrieved candidate documents', () => {
 
 describe('core feedback privacy', () => {
   it('keeps body-derived titles and snippets local while sending only approved metadata', async () => {
-    const planFeedback = vi.fn(async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }));
+    const planFeedback = vi.fn(async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }));
     const session = new SearchSession({
       source: {
         sourceId: 'example', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' },
@@ -520,7 +519,7 @@ describe('bounded feedback at the planner port', () => {
         planFeedback: async (input) => {
           received = JSON.stringify(input);
           count = input.candidates.length;
-          return { newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' };
+          return { judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' };
         },
         planBlindExpansion: vi.fn(),
       },
@@ -581,7 +580,7 @@ describe('issue #22 pagination and early stop', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => ({ ...timePlan, timeConstraint: { expression: '最近一个月', startDate: '2026-08-19', endDate: '2026-09-19' } }),
-        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: async () => ({ ...timePlan, searches: [{ query: '更宽检索词', purpose: '' }], timeConstraint: { expression: '最近一个月', startDate: '2026-08-19', endDate: '2026-09-19' } }),
       },
       source: { sourceId: 'cc98', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' },
@@ -667,7 +666,7 @@ describe('final intent screening', () => {
   });
   const makePlanner = (screenResults?: (input: { candidates: { key: string }[] }) => Promise<{ removeKeys: string[] }>) => ({
     planFirstRound: async () => screenPlan,
-    planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+    planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
     planBlindExpansion: vi.fn(),
     ...(screenResults ? { screenResults } : {}),
   });
@@ -740,7 +739,7 @@ describe('final intent screening', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => ({ ...screenPlan, timeConstraint: { expression: '2025 年', startDate: '2025-01-01', endDate: '2025-12-31' } }),
-        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
         screenResults: async (input) => { seen.push(...input.candidates.map((candidate) => candidate.key)); return { removeKeys: [] }; },
       },
@@ -827,7 +826,7 @@ describe('screening cancellation boundaries', () => {
     session = new SearchSession({
       planner: {
         planFirstRound: async () => plan,
-        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '' }),
         planBlindExpansion: vi.fn(),
         screenResults,
       },
@@ -854,7 +853,7 @@ describe('screening cancellation boundaries', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => plan,
-        planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
         screenResults: (_input: unknown, signal?: AbortSignal) => {
           screenSignal = signal;
