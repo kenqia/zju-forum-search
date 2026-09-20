@@ -88,6 +88,24 @@ export function stopReasonText(reason: SearchStopReason): string {
   return messages[reason];
 }
 
+function waitForAbortable<T>(operation: Promise<T>, signal: AbortSignal, message: string): Promise<T> {
+  if (signal.aborted) return Promise.reject(new DOMException(message, 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new DOMException(message, 'AbortError'));
+    signal.addEventListener('abort', abort, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export class SearchSession {
   private readonly planner: SearchPlanner;
   private readonly source: SearchSourceSession;
@@ -97,6 +115,7 @@ export class SearchSession {
   private readonly finalRerankTopM: number;
   private controller = new AbortController();
   private rerankController: AbortController | null = null;
+  private rerankCancelled = false;
   private requestedStop: SearchStopReason | null = null;
   private snapshot: SearchSnapshot = {
     query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
@@ -114,9 +133,19 @@ export class SearchSession {
   }
 
   stop(reason: 'user_stopped' | 'replaced' = 'user_stopped'): void {
+    if (reason === 'user_stopped' && this.snapshot.phase === 'reranking') {
+      this.cancelFinalRerank();
+      return;
+    }
     this.requestedStop = reason;
     this.controller.abort();
-    this.rerankController?.abort();
+    if (reason === 'replaced') this.rerankController?.abort();
+  }
+
+  cancelFinalRerank(): void {
+    if (!this.rerankController) return;
+    this.rerankCancelled = true;
+    this.rerankController.abort();
   }
 
   private publish(patch: Partial<SearchSnapshot> = {}): void {
@@ -125,7 +154,7 @@ export class SearchSession {
   }
 
   private finishSync(reason: SearchStopReason, statusText = stopReasonText(reason)): SearchSnapshot {
-    this.publish({ phase: 'complete', stopReason: reason, statusText });
+    this.publish({ phase: 'complete', activeSearches: [], stopReason: reason, statusText });
     return this.snapshot;
   }
 
@@ -156,10 +185,24 @@ export class SearchSession {
   /** 原子应用一次列表响应；失败、超时、取消或非法负载都完整保留本地预排序。 */
   private async rerank(view: RankedCandidateView, selection: FinalRerankSelection): Promise<void> {
     this.rerankController = new AbortController();
+    this.rerankCancelled = false;
     try {
-      this.publish({ phase: 'reranking', finalRerank: 'running', statusText: `正在重排本地预排序前 ${selection.input.candidates.length} 条结果…` });
-      const plan = await this.planner.rerankResults!(selection.input, this.rerankController.signal);
+      this.publish({ phase: 'reranking', activeSearches: [], finalRerank: 'running', statusText: `正在重排本地预排序前 ${selection.input.candidates.length} 条结果…` });
+      const signal = this.rerankController.signal;
+      const plan = await waitForAbortable(
+        this.planner.rerankResults!(selection.input, signal),
+        signal,
+        '最终列表重排已取消',
+      );
       if (this.requestedStop === 'replaced') return;
+      if (this.rerankCancelled) {
+        this.publish({
+          phase: 'complete',
+          finalRerank: 'cancelled',
+          statusText: '已取消最终列表重排，保留本地预排序。',
+        });
+        return;
+      }
       const outcome = applyFinalRerankPlan(view.results, selection, plan);
       this.publish({
         results: outcome.results,
@@ -168,7 +211,7 @@ export class SearchSession {
       });
     } catch {
       if (this.requestedStop === 'replaced') return;
-      const cancelled = this.requestedStop === 'user_stopped' && this.rerankController.signal.aborted;
+      const cancelled = this.rerankCancelled;
       this.publish({
         phase: 'complete',
         finalRerank: cancelled ? 'cancelled' : 'failed',
@@ -204,7 +247,12 @@ export class SearchSession {
 
     this.publish({ query: normalizedQuery, phase: 'planning', round, statusText: '正在规划首轮检索词…' });
     try {
-      const plan = await this.planner.planFirstRound(normalizedQuery, this.controller.signal);
+      const plan = await waitForAbortable(
+        this.planner.planFirstRound(normalizedQuery, this.controller.signal),
+        this.controller.signal,
+        '搜索运行已终止',
+      );
+      if (this.requestedStop) return this.finish(this.requestedStop, runContext());
       this.publish({
         plan,
         planningNotice: plan.usedOriginalQueryFallback ? '模型计划无效，已直接搜索原词。' : '',
@@ -271,11 +319,20 @@ export class SearchSession {
           const searchKey = folded(current.search.query);
           continuations.delete(searchKey);
           if (this.snapshot.requestsMade > 0) {
-            await this.sleep(minRequestIntervalMs);
+            await waitForAbortable(
+              this.sleep(minRequestIntervalMs),
+              this.controller.signal,
+              '站点请求间隔已终止',
+            );
             if (this.requestedStop) return this.finish(this.requestedStop, runContext());
           }
           this.publish({ requestsMade: this.snapshot.requestsMade + 1 });
-          const page = await this.source.search(current.search.query, current.cursor, this.controller.signal);
+          const page = await waitForAbortable(
+            this.source.search(current.search.query, current.cursor, this.controller.signal),
+            this.controller.signal,
+            '站点检索已终止',
+          );
+          if (this.requestedStop) return this.finish(this.requestedStop, runContext());
           const previous = executed.get(searchKey);
           executed.set(searchKey, { query: current.search.query, hitCount: (previous?.hitCount ?? 0) + page.hits.length });
           if ((executed.get(searchKey)?.hitCount ?? 0) === 0) inactive.add(current.search.query);
@@ -308,7 +365,12 @@ export class SearchSession {
             return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
           }
           this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });
-          const blind = await this.planner.planBlindExpansion(normalizedQuery, this.controller.signal);
+          const blind = await waitForAbortable(
+            this.planner.planBlindExpansion(normalizedQuery, this.controller.signal),
+            this.controller.signal,
+            '搜索运行已终止',
+          );
+          if (this.requestedStop) return this.finish(this.requestedStop, runContext());
           blindExpanded = true;
           enqueueFirstPages(blind.searches);
           firstWave = false;
@@ -332,11 +394,12 @@ export class SearchSession {
         }
 
         this.publish({ phase: 'feedback', statusText: `正在判断第 ${round} 个检索波次的候选证据…` });
-        const feedback = await this.planner.planFeedback(createFeedbackInput({
+        const feedback = await waitForAbortable(this.planner.planFeedback(createFeedbackInput({
           query: normalizedQuery,
           executedSearches: [...executed.values()],
           candidates: selected.candidates,
-        }), this.controller.signal);
+        }), this.controller.signal), this.controller.signal, '反馈调用已终止');
+        if (this.requestedStop) return this.finish(this.requestedStop, runContext());
         applyFeedbackJudgments(selected.entries, feedback.judgments);
         const mayExpand = feedback.judgments.some((judgment) => judgment.grade === 2 || judgment.grade === 3);
         if (mayExpand) feedback.learnedTerms.forEach((term) => learned.add(term));

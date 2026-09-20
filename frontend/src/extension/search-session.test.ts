@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { SearchSession, SearchSessionError, stopReasonText, type SearchSnapshot, type SearchStopReason } from './search-session';
-import type { ModelQueryPlan } from './types';
+import type { FeedbackPlan, ModelQueryPlan } from './types';
 
 
 function asPageSource(searchTopics: (query: string, from: number, size: number, signal?: AbortSignal) => Promise<unknown[]>) {
@@ -223,6 +223,35 @@ describe('SearchSession', () => {
     expect(result.stopReason).toBe('user_stopped');
   });
 
+  it('请求间隔的等待忽略取消时仍立即停止', async () => {
+    let markIntervalStarted!: () => void;
+    const intervalStarted = new Promise<void>((resolve) => { markIntervalStarted = resolve; });
+    const searchTopics = vi.fn(async (query) => [{ id: query, title: query }]);
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => initialPlan,
+        planFeedback: vi.fn(async () => continueFeedback()),
+        planBlindExpansion: vi.fn(),
+      },
+      source: asPageSource(searchTopics),
+      sleep: () => {
+        markIntervalStarted();
+        return new Promise(() => undefined);
+      },
+    });
+    const run = session.run('高数', 60);
+    await intervalStarted;
+
+    session.stop('user_stopped');
+    const result = await Promise.race([
+      run,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('停止被请求间隔阻塞')), 50)),
+    ]);
+
+    expect(searchTopics).toHaveBeenCalledOnce();
+    expect(result.stopReason).toBe('user_stopped');
+  });
+
   it('finishes promptly when stopped during model planning', async () => {
     let planningSignal: AbortSignal | undefined;
     const session = new SearchSession({
@@ -243,6 +272,38 @@ describe('SearchSession', () => {
 
     expect(planningSignal?.aborted).toBe(true);
     expect(result.stopReason).toBe('user_stopped');
+  });
+
+  it('运行被替换后不合并忽略 AbortSignal 的迟到站点响应', async () => {
+    let finishSearch!: (items: unknown[]) => void;
+    let markSearchStarted!: () => void;
+    const searchStarted = new Promise<void>((resolve) => { markSearchStarted = resolve; });
+    const snapshots: SearchSnapshot[] = [];
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
+        planFeedback: vi.fn(async () => continueFeedback()),
+        planBlindExpansion: vi.fn(),
+      },
+      source: asPageSource(() => {
+        markSearchStarted();
+        return new Promise((resolve) => { finishSearch = resolve; });
+      }),
+      sleep: async () => undefined,
+      onUpdate: (snapshot) => snapshots.push(snapshot),
+    });
+    const run = session.run('高数', 30);
+    await searchStarted;
+    const updatesBeforeReplacement = snapshots.length;
+
+    session.stop('replaced');
+    finishSearch([{ id: 'late', title: '迟到资料' }]);
+    const result = await run;
+
+    expect(result.stopReason).toBe('replaced');
+    expect(result.results).toEqual([]);
+    expect(snapshots.slice(updatesBeforeReplacement).map((snapshot) => [snapshot.phase, snapshot.stopReason]))
+      .toEqual([['complete', 'replaced']]);
   });
 
   it('stops at the request limit before requesting another full page', async () => {
@@ -304,6 +365,47 @@ describe('SearchSession', () => {
     expect(result.stopReason).toBe('model_timeout');
     expect(result.statusText).toBe('反馈模型调用超过 20 秒，已保留当前结果。');
     expect(result.results.map((topic) => topic.id)).toEqual(['kept']);
+  });
+
+  it('运行在反馈期间被替换时丢弃迟到响应并跳过重排', async () => {
+    let finishFeedback!: (feedback: FeedbackPlan) => void;
+    let markFeedbackStarted!: () => void;
+    const feedbackStarted = new Promise<void>((resolve) => { markFeedbackStarted = resolve; });
+    const rerankResults = vi.fn(async () => ({ orderedKeys: [], removeKeys: [] }));
+    const snapshots: SearchSnapshot[] = [];
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '资料', purpose: '' }] }),
+        planFeedback: () => {
+          markFeedbackStarted();
+          return new Promise((resolve) => { finishFeedback = resolve; });
+        },
+        planBlindExpansion: vi.fn(),
+        rerankResults,
+      },
+      source: asPageSource(vi.fn(async () => [
+        { id: 'first', title: '资料一' },
+        { id: 'second', title: '资料二' },
+      ])),
+      sleep: async () => undefined,
+      onUpdate: (snapshot) => snapshots.push(snapshot),
+    });
+    const run = session.run('资料', 30);
+    await feedbackStarted;
+    const updatesBeforeReplacement = snapshots.length;
+
+    session.stop('replaced');
+    finishFeedback({
+      judgments: [{ key: 'c1', grade: 3 }],
+      newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+    });
+    const result = await run;
+
+    expect(result.stopReason).toBe('replaced');
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['first', 'second']);
+    expect(rerankResults).not.toHaveBeenCalled();
+    expect(snapshots.slice(updatesBeforeReplacement).map((snapshot) => [snapshot.phase, snapshot.stopReason]))
+      .toEqual([['complete', 'replaced']]);
   });
 
   it('excludes out-of-range topics and feedback evidence for an explicit time request', async () => {
@@ -828,13 +930,25 @@ describe('最终列表重排', () => {
   it('用户停止站点检索后重排已有主结果候选', async () => {
     const rerankResults = vi.fn(async () => ({ orderedKeys: [], removeKeys: [] }));
     let session!: SearchSession;
+    let searchCalls = 0;
     session = new SearchSession({
-      planner: makePlanner(rerankResults),
+      planner: {
+        ...makePlanner(rerankResults),
+        planFirstRound: async () => ({ ...rerankPlan, searches: [
+          { query: '已取得候选', purpose: '' },
+          { query: '待取消请求', purpose: '' },
+        ] }),
+      },
       source: {
         ...makeSource(2),
         search: vi.fn(async () => {
+          searchCalls += 1;
+          if (searchCalls === 1) return { hits: hits(2), nextCursor: undefined };
           session.stop('user_stopped');
-          return { hits: hits(2), nextCursor: undefined };
+          return { hits: [{
+            candidate: { sourceId: 'cc98', id: 'late', title: '迟到候选', titleOrigin: 'native' as const, url: 'u' },
+            document: { title: '迟到候选' }, position: 1,
+          }], nextCursor: undefined };
         }),
       },
       sleep: async () => undefined,
@@ -844,6 +958,46 @@ describe('最终列表重排', () => {
 
     expect(result.stopReason).toBe('user_stopped');
     expect(rerankResults).toHaveBeenCalledOnce();
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['c-0', 'c-1']);
+    expect(result.activeSearches).toEqual([]);
+  });
+
+  it('站点请求忽略 AbortSignal 时仍立即停止并重排已取得候选', async () => {
+    const rerankResults = vi.fn(async () => ({ orderedKeys: [], removeKeys: [] }));
+    let markPendingSearchStarted!: () => void;
+    const pendingSearchStarted = new Promise<void>((resolve) => { markPendingSearchStarted = resolve; });
+    let searchCalls = 0;
+    const session = new SearchSession({
+      planner: {
+        ...makePlanner(rerankResults),
+        planFirstRound: async () => ({ ...rerankPlan, searches: [
+          { query: '已取得候选', purpose: '' },
+          { query: '永不返回', purpose: '' },
+        ] }),
+      },
+      source: {
+        ...makeSource(2),
+        search: () => {
+          searchCalls += 1;
+          if (searchCalls === 1) return Promise.resolve({ hits: hits(2), nextCursor: undefined });
+          markPendingSearchStarted();
+          return new Promise(() => undefined);
+        },
+      },
+      sleep: async () => undefined,
+    });
+    const run = session.run('资料', 30);
+    await pendingSearchStarted;
+
+    session.stop('user_stopped');
+    const result = await Promise.race([
+      run,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('停止站点检索未立即完成')), 50)),
+    ]);
+
+    expect(result.stopReason).toBe('user_stopped');
+    expect(rerankResults).toHaveBeenCalledOnce();
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['c-0', 'c-1']);
   });
 
   it('新查询替换运行时取消进行中的最终列表重排', async () => {
@@ -889,6 +1043,44 @@ describe('最终列表重排', () => {
 
     expect(result.finalRerank).toBe('cancelled');
     expect(result.statusText).toContain('已取消最终列表重排，保留本地预排序');
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['c-0', 'c-1']);
+  });
+
+  it('取消后丢弃忽略 AbortSignal 的迟到重排成功响应', async () => {
+    let finishRerank!: (plan: { orderedKeys: string[]; removeKeys: string[] }) => void;
+    let rerankInput!: { candidates: { key: string }[] };
+    let markRerankStarted!: () => void;
+    const rerankStarted = new Promise<void>((resolve) => { markRerankStarted = resolve; });
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => rerankPlan,
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planBlindExpansion: vi.fn(),
+        rerankResults: (input: { candidates: { key: string }[] }) => {
+          rerankInput = input;
+          markRerankStarted();
+          return new Promise<{ orderedKeys: string[]; removeKeys: string[] }>((resolve) => { finishRerank = resolve; });
+        },
+      },
+      source: makeSource(2),
+      sleep: async () => undefined,
+    });
+    const run = session.run('资料', 30);
+    await rerankStarted;
+
+    session.cancelFinalRerank();
+    const result = await Promise.race([
+      run,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('取消重排未立即完成')), 50)),
+    ]);
+    finishRerank({
+      orderedKeys: [...rerankInput.candidates].reverse().map((candidate) => candidate.key),
+      removeKeys: [],
+    });
+    await Promise.resolve();
+
+    expect(result.stopReason).toBe('model_stop');
+    expect(result.finalRerank).toBe('cancelled');
     expect(result.results.map((candidate) => candidate.id)).toEqual(['c-0', 'c-1']);
   });
 });

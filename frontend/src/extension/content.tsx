@@ -199,7 +199,9 @@ export function SearchStatus({ snapshot, running, onStop }: {
 }) {
   return <>
     <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' || snapshot.finalRerank === 'failed' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
-    {running && <div className="run-actions"><button className="secondary" type="button" onClick={onStop}>停止并查看结果</button></div>}
+    {running && <div className="run-actions"><button className="secondary" type="button" onClick={onStop}>
+      {snapshot.phase === 'reranking' ? '取消最终列表重排' : '停止并查看结果'}
+    </button></div>}
   </>;
 }
 

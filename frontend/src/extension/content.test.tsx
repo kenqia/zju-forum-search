@@ -85,6 +85,8 @@ describe('extension content UI', () => {
 
     await act(async () => root.render(<SearchStatus snapshot={base} running onStop={vi.fn()} />));
     expect(container.textContent).toContain('正在重排本地预排序前 30 条结果');
+    expect(container.querySelector('.run-actions button')?.textContent).toBe('取消最终列表重排');
+    expect(container.textContent).not.toContain('停止并查看结果');
 
     await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', finalRerank: 'done', statusText: '模型停止。最终列表重排完成。' }} running={false} onStop={vi.fn()} />));
     expect(container.textContent).toContain('最终列表重排完成');
