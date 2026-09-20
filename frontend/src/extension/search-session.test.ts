@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { SearchSession, SearchSessionError, stopReasonText, type SearchStopReason } from './search-session';
+import { SearchSession, SearchSessionError, stopReasonText, type SearchSnapshot, type SearchStopReason } from './search-session';
 import type { ModelQueryPlan } from './types';
 
 
@@ -46,6 +46,37 @@ const continueFeedback = () => ({
 });
 
 describe('SearchSession', () => {
+  it('publishes relevance-led local presorting after feedback and keeps it in the completed result', async () => {
+    const snapshots: SearchSnapshot[] = [];
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
+        planFeedback: async (input) => ({
+          judgments: input.candidates.map((candidate) => ({
+            key: candidate.key,
+            grade: candidate.title.includes('求助') ? 3 as const : 2 as const,
+          })),
+          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+        }),
+        planBlindExpansion: vi.fn(),
+      },
+      source: asPageSource(vi.fn(async () => [
+        { id: 'lexically-strong', title: '高数资料' },
+        { id: 'grade-3', title: '大学资料求助' },
+      ])),
+      sleep: async () => undefined,
+      onUpdate: (snapshot) => snapshots.push(snapshot),
+      intentFilterEnabled: false,
+    });
+
+    const result = await session.run('找高数资料', 30);
+    const judgedSnapshot = snapshots.find((snapshot) => snapshot.phase === 'feedback'
+      && snapshot.results[0]?.id === 'grade-3');
+
+    expect(judgedSnapshot?.results.map((candidate) => candidate.id)).toEqual(['grade-3', 'lexically-strong']);
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['grade-3', 'lexically-strong']);
+  });
+
   it('runs breadth-first pages, feeds back metadata, and keeps fixed constraints', async () => {
     let firstFeedbackInput: unknown;
     const planner = {

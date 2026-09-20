@@ -253,10 +253,10 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
     </form>
     <SearchStatus snapshot={snapshot} running={running} onStop={stop} />
     {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
-    {snapshot.outOfRangeCount > 0 && <p className="filtered-count">另有 {snapshot.outOfRangeCount} 条范围外结果已忽略。</p>}
     <ResultLists
       results={snapshot.results}
       softIsolatedResults={snapshot.softIsolatedResults}
+      outOfRangeCount={snapshot.outOfRangeCount}
       emptyText={snapshot.phase === 'complete' && snapshot.stopReason === 'no_results' ? '没有找到主题帖。' : '结果将在这里逐轮出现。'}
     />
   </>;
@@ -265,16 +265,18 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
 function ResultCard({ topic, rank }: { topic: import('./types').TopicCandidate; rank?: number }) {
   return <article className="result">
     {rank !== undefined && <span className="rank">{rank}</span>}
-    <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复 · 首次命中第 {topic.firstRound} 轮</p></div>
+    <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复</p></div>
   </article>;
 }
 
-export function ResultLists({ results, softIsolatedResults, emptyText }: {
+export function ResultLists({ results, softIsolatedResults, outOfRangeCount, emptyText }: {
   results: import('./types').TopicCandidate[];
   softIsolatedResults: import('./types').TopicCandidate[];
+  outOfRangeCount: number;
   emptyText: string;
 }) {
   return <div aria-live="polite">
+    <p className="result-counts">主结果 {results.length} · 软隔离 {softIsolatedResults.length} · 时间范围外 {outOfRangeCount}</p>
     {results.length === 0
       ? <div className="empty">{emptyText}</div>
       : results.map((topic, index) => <ResultCard topic={topic} rank={index + 1} key={topic.id} />)}
@@ -303,7 +305,7 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
       <span className="orb-mark">搜</span><span className="orb-dot" />
     </button>
     <aside className={`drawer${open ? ' open' : ''}`} aria-label="社区自然语言搜索" aria-hidden={!open}>
-      <div className="drawer-head"><div><p className="kicker">CAMPUS SEARCH</p><h1>找到真正相关的讨论</h1><p className="subtitle">模型规划检索词，当前站点返回候选，浏览器本地重排。</p></div><button className="close" type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button></div>
+      <div className="drawer-head"><div><p className="kicker">CAMPUS SEARCH</p><h1>找到真正相关的讨论</h1><p className="subtitle">模型规划检索词，当前站点返回候选，浏览器本地预排序。</p></div><button className="close" type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button></div>
       <nav className="tabs" aria-label="功能切换">
         <button className={`tab${tab === 'search' ? ' active' : ''}`} data-tab="search" type="button" onClick={() => setTab('search')}>搜索</button>
         <button className={`tab${tab === 'settings' ? ' active' : ''}`} data-tab="settings" type="button" onClick={() => setTab('settings')}>模型设置</button>

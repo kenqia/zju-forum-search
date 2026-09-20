@@ -99,13 +99,34 @@ describe('extension content UI', () => {
     const container = document.createElement('div');
     const root = createRoot(container);
     const topic = { id: 'hidden', title: '可能误判的资料', board: '学习天地', time: '2026-09-20', author: '', replyCount: 2, url: 'https://www.cc98.org/topic/hidden', firstRound: 1 };
-    await act(async () => root.render(<ResultLists results={[]} softIsolatedResults={[topic]} emptyText="暂无" />));
+    await act(async () => root.render(<ResultLists results={[]} softIsolatedResults={[topic]} outOfRangeCount={0} emptyText="暂无" />));
 
     const details = container.querySelector('details');
     expect(details?.open).toBe(false);
     expect(details?.querySelector('summary')?.textContent).toContain('已隐藏的明确无关结果（1）');
     expect(details?.querySelector('a')?.getAttribute('href')).toBe(topic.url);
     expect(details?.textContent).not.toContain('grade');
+    await act(async () => root.unmount());
+  });
+
+  it('shows separate result counts without exposing local presorting signals on ordinary cards', async () => {
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const active = { id: 'active', title: '高数资料', board: '学习天地', time: '2026-09-20', author: '', replyCount: 2, url: 'https://www.cc98.org/topic/active', firstRound: 3 };
+    const isolated = { ...active, id: 'isolated', title: '无关资料', url: 'https://www.cc98.org/topic/isolated' };
+
+    await act(async () => root.render(<ResultLists
+      results={[active]}
+      softIsolatedResults={[isolated]}
+      outOfRangeCount={2}
+      emptyText="暂无"
+    />));
+
+    expect(container.querySelector('.result-counts')?.textContent).toBe('主结果 1 · 软隔离 1 · 时间范围外 2');
+    const activeCard = container.querySelector('.result');
+    expect(activeCard?.textContent).toContain('高数资料');
+    expect(activeCard?.textContent).not.toContain('首次命中');
+    expect(activeCard?.textContent).not.toMatch(/等级|得分|检索词|排序原因|判断历史/u);
     await act(async () => root.unmount());
   });
 

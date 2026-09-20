@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { rankCandidates } from './ranking';
-import type { ModelQueryPlan, RetrievedCandidate } from './types';
+import { rankAndFilterCandidates, rankCandidates } from './ranking';
+import type { ModelQueryPlan, RelevanceGrade, RetrievedCandidate } from './types';
 
 const plan: ModelQueryPlan = {
   summary: '高数资料',
@@ -12,7 +12,7 @@ const plan: ModelQueryPlan = {
 };
 
 function topic(id: string, patch: Partial<{
-  title: string; time: string; plans: string[]; bestRank: number; firstRound: number;
+  title: string; time: string; plans: string[]; bestRank: number; firstRound: number; relevanceGrade: RelevanceGrade;
 }> = {}): RetrievedCandidate {
   const fixture = { title: '高数资料', time: '2025-06-01', plans: ['高数'], bestRank: 10, firstRound: 1, ...patch };
   const candidate = { sourceId: 'example', id, titleOrigin: 'native' as const, title: fixture.title, section: '学习天地',
@@ -21,10 +21,55 @@ function topic(id: string, patch: Partial<{
     candidate,
     observations: fixture.plans.map((query) => ({ query, round: fixture.firstRound, position: fixture.bestRank })),
     documents: fixture.plans.map(() => ({ title: fixture.title, section: '学习天地', publishedAt: fixture.time })),
+    relevanceGrade: patch.relevanceGrade,
   };
 }
 
 describe('rankCandidates', () => {
+  it('lets higher relevance grades outrank every lexical and retrieval tie-break', () => {
+    const ranked = rankCandidates([
+      topic('grade-2-strong-lexical', { relevanceGrade: 2, plans: ['高数', '微积分'], bestRank: 1, firstRound: 1 }),
+      topic('grade-3-weak-lexical', { relevanceGrade: 3, title: '大学资料求助', plans: ['高数'], bestRank: 50, firstRound: 3 }),
+      topic('unjudged-strong-lexical', { plans: ['高数', '微积分'], bestRank: 1, firstRound: 1 }),
+      topic('grade-2-weak-lexical', { relevanceGrade: 2, title: '大学资料求助', plans: ['高数'], bestRank: 50, firstRound: 3 }),
+    ], plan);
+
+    expect(ranked.map((item) => item.id)).toEqual([
+      'grade-3-weak-lexical',
+      'grade-2-strong-lexical',
+      'grade-2-weak-lexical',
+      'unjudged-strong-lexical',
+    ]);
+  });
+
+  it('places grade 1 and unjudged candidates in the same semantic tier', () => {
+    const ranked = rankCandidates([
+      topic('grade-1-weak', { relevanceGrade: 1, title: '大学资料求助', bestRank: 50 }),
+      topic('unjudged-strong', { plans: ['高数', '微积分'], bestRank: 1 }),
+    ], plan);
+
+    expect(ranked.map((item) => item.id)).toEqual(['unjudged-strong', 'grade-1-weak']);
+  });
+
+  it('applies an explicit time range as a hard filter before relevance ordering', () => {
+    const view = rankAndFilterCandidates([
+      topic('old-grade-3', { relevanceGrade: 3, time: '2024-06-01' }),
+      topic('unknown-date', { relevanceGrade: 2, time: '' }),
+      topic('current-unjudged'),
+    ], plan, true);
+
+    expect(view.results.map((item) => item.id)).toEqual(['unknown-date', 'current-unjudged']);
+    expect(view.outOfRangeCount).toBe(1);
+  });
+
+  it('uses the candidate identity as the final deterministic tie-break', () => {
+    const a = topic('a', { title: '完全相同的标题' });
+    const b = topic('b', { title: '完全相同的标题' });
+
+    expect(rankCandidates([b, a], plan).map((item) => item.id)).toEqual(['a', 'b']);
+    expect(rankCandidates([a, b], plan).map((item) => item.id)).toEqual(['a', 'b']);
+  });
+
   it('uses the specified lexicographic order and first-round tie-break', () => {
     const ranked = rankCandidates([
       topic('out', { time: '2024-06-01', plans: ['高数', '微积分'], bestRank: 1 }),
@@ -37,12 +82,12 @@ describe('rankCandidates', () => {
     ], plan);
 
     expect(ranked.map((item) => item.id)).toEqual([
+      'unknown',
       'earlier',
       'later',
       'single',
       'missing',
       'excluded',
-      'unknown',
       'out',
     ]);
   });

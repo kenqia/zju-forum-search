@@ -28,11 +28,13 @@ function timeStatus(entry: RetrievedCandidate, plan: ModelQueryPlan): TimeStatus
   return (start === null || published >= start) && (end === null || published <= end) ? 'in_range' : 'out_of_range';
 }
 
-const TIME_ORDER: Record<TimeStatus, number> = { in_range: 0, unknown: 1, out_of_range: 2 };
+const TIME_ORDER: Record<TimeStatus, number> = { in_range: 0, unknown: 0, out_of_range: 1 };
+const RELEVANCE_ORDER = { 0: 3, 1: 2, 2: 1, 3: 0 } as const;
 
 interface ScoredCandidate {
   entry: RetrievedCandidate;
   timeOrder: number;
+  relevanceOrder: number;
   excludedCount: number;
   missingConceptCount: number;
   queryCount: number;
@@ -50,6 +52,7 @@ function score(entry: RetrievedCandidate, plan: ModelQueryPlan): ScoredCandidate
   return {
     entry,
     timeOrder: TIME_ORDER[timeStatus(entry, plan)],
+    relevanceOrder: entry.relevanceGrade === undefined ? RELEVANCE_ORDER[1] : RELEVANCE_ORDER[entry.relevanceGrade],
     excludedCount: plan.excludedTerms.filter(matches).length,
     missingConceptCount: plan.requiredConcepts.filter((concept) => !concept.expressions.some(matches)).length,
     queryCount: new Set(entry.observations.map((observation) => folded(observation.query))).size,
@@ -72,12 +75,17 @@ export function rankCandidates(candidates: RetrievedCandidate[], plan: ModelQuer
   const ranked = candidates.map((entry) => score(entry, plan));
   ranked.sort((a, b) => {
     if (a.timeOrder !== b.timeOrder) return a.timeOrder - b.timeOrder;
+    if (a.relevanceOrder !== b.relevanceOrder) return a.relevanceOrder - b.relevanceOrder;
     if (a.excludedCount !== b.excludedCount) return a.excludedCount - b.excludedCount;
     if (a.missingConceptCount !== b.missingConceptCount) return a.missingConceptCount - b.missingConceptCount;
     if (a.queryCount !== b.queryCount) return b.queryCount - a.queryCount;
     if (a.bestPosition !== b.bestPosition) return a.bestPosition - b.bestPosition;
     if (a.earliestRound !== b.earliestRound) return a.earliestRound - b.earliestRound;
-    return a.entry.candidate.title.localeCompare(b.entry.candidate.title, 'zh-CN');
+    const titleOrder = a.entry.candidate.title.localeCompare(b.entry.candidate.title, 'zh-CN');
+    if (titleOrder !== 0) return titleOrder;
+    const aKey = `${a.entry.candidate.sourceId}\u0000${a.entry.candidate.id}`;
+    const bKey = `${b.entry.candidate.sourceId}\u0000${b.entry.candidate.id}`;
+    return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
   });
   return ranked.map(displayResult);
 }
