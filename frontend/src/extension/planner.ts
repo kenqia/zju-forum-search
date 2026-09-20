@@ -1,7 +1,7 @@
 import { buildFeedbackPayload } from './feedback-payload';
-import { assertScreeningShape, buildScreeningPayload, normalizeScreeningPlan } from './screening';
+import { buildFinalRerankPayload, normalizeFinalRerankPlan } from './final-reranking';
 import { folded, normalizeText } from './text';
-import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, ModelQueryPlan, PlannedSearch, ScreeningPlan, ScreeningRequestInput, SourceCapabilities, TimeConstraint } from './types';
+import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, FinalRerankPlan, FinalRerankRequestInput, ModelQueryPlan, PlannedSearch, SourceCapabilities, TimeConstraint } from './types';
 
 export interface PlannerTransport {
   chatCompletions(settings: ExtensionSettings, messages: { role: string; content: string }[], signal?: AbortSignal): Promise<string>;
@@ -319,13 +319,12 @@ ${sourceInstructions(capabilities)}
 }`;
 }
 
-export function screeningSystemPrompt(): string {
-  return `你是搜索结果意图筛选器。输入是用户的原始查询和一批候选主题帖的白名单元数据（临时键、原生标题、作者、发布时间、板块、回复数）。
-判断哪些候选与查询意图明显无关。正文、回帖、命中片段、平台 ID 和 URL 都不会提供；正文派生标题为空时只能依据元数据判断，不得推测正文。
-只返回确实要移除的候选的临时键；拿不准的一律保留。
+export function finalRerankSystemPrompt(): string {
+  return `你是搜索结果的最终列表重排器。输入是用户的原始查询和一个小规模候选列表，其中只有运行内临时键和白名单元数据（原生标题、作者、发布时间、板块、回复数）。
+按查询意图返回候选的相对顺序，并只建议移除明确无关的候选。正文、回帖、命中片段、等级、检索支持、平台 ID、URL、来源位次和轮次都不会提供；正文派生标题为空时只能依据其他元数据判断，不得推测正文。拿不准时保留。不要改写临时键。
 
 返回 JSON：
-{ "remove_keys": ["要移除的候选临时键"] }`;
+{ "ordered_keys": ["按相关性排列的候选临时键"], "remove_keys": ["明确建议移除的候选临时键"] }`;
 }
 
 export type FeedbackInput = FeedbackRequestInput;
@@ -380,13 +379,12 @@ export class PlannerClient {
     return modelPlanFromContent(content, query, this.today);
   }
 
-  async screenResults(input: ScreeningRequestInput, signal?: AbortSignal): Promise<ScreeningPlan> {
+  async rerankResults(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {
     const content = await this.transport.chatCompletions(this.settings, [
-      { role: 'system', content: screeningSystemPrompt() },
-      { role: 'user', content: JSON.stringify(buildScreeningPayload(input)) },
+      { role: 'system', content: finalRerankSystemPrompt() },
+      { role: 'user', content: JSON.stringify(buildFinalRerankPayload(input)) },
     ], signal);
     const raw = parseJson(content);
-    assertScreeningShape(raw);
-    return normalizeScreeningPlan(raw, new Set(input.candidates.map((candidate) => candidate.key)));
+    return normalizeFinalRerankPlan(raw, new Set(input.candidates.map((candidate) => candidate.key)));
   }
 }

@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type ExtensionSettings } from './types';
+import { DEFAULT_SETTINGS, type ExtensionSettings, type StoredExtensionSettings } from './types';
 
 const MIN_BUDGET_SECONDS = 10;
 const MAX_BUDGET_SECONDS = 300;
@@ -6,6 +6,8 @@ const MIN_REQUEST_LIMIT = 1;
 const MAX_REQUEST_LIMIT = 100;
 const MIN_FEEDBACK_EVIDENCE_LIMIT = 10;
 const MAX_FEEDBACK_EVIDENCE_LIMIT = 100;
+const MIN_FINAL_RERANK_TOP_M = 10;
+const MAX_FINAL_RERANK_TOP_M = 150;
 
 function clampedCount(value: unknown, min: number, max: number, fallback: number): number {
   if (typeof value === 'string' && !value.trim()) return fallback;
@@ -29,23 +31,27 @@ function parseHttpUrl(value: string): URL {
   return parsed;
 }
 
-export function normalizeSettings(value: Partial<ExtensionSettings>): ExtensionSettings {
+export function normalizeSettings(value: StoredExtensionSettings): ExtensionSettings {
   const baseUrl = parseHttpUrl(value.llmBaseUrl ?? DEFAULT_SETTINGS.llmBaseUrl);
   baseUrl.search = '';
   baseUrl.hash = '';
   const budget = Number(value.searchBudgetSeconds ?? DEFAULT_SETTINGS.searchBudgetSeconds);
+  const finalRerankEnabled = Object.hasOwn(value, 'finalRerankEnabled')
+    ? typeof value.finalRerankEnabled === 'boolean' ? value.finalRerankEnabled : DEFAULT_SETTINGS.finalRerankEnabled
+    : typeof value.intentFilterEnabled === 'boolean' ? value.intentFilterEnabled : DEFAULT_SETTINGS.finalRerankEnabled;
   return {
     llmBaseUrl: baseUrl.toString().replace(/\/$/u, ''),
     llmApiKey: String(value.llmApiKey ?? '').trim(),
     llmModel: String(value.llmModel ?? '').trim(),
     searchRequestLimit: clampedCount(value.searchRequestLimit ?? DEFAULT_SETTINGS.searchRequestLimit, MIN_REQUEST_LIMIT, MAX_REQUEST_LIMIT, DEFAULT_SETTINGS.searchRequestLimit),
     feedbackEvidenceLimit: clampedCount(value.feedbackEvidenceLimit ?? DEFAULT_SETTINGS.feedbackEvidenceLimit, MIN_FEEDBACK_EVIDENCE_LIMIT, MAX_FEEDBACK_EVIDENCE_LIMIT, DEFAULT_SETTINGS.feedbackEvidenceLimit),
-    intentFilterEnabled: typeof value.intentFilterEnabled === 'boolean' ? value.intentFilterEnabled : DEFAULT_SETTINGS.intentFilterEnabled,
+    finalRerankEnabled,
+    finalRerankTopM: clampedCount(value.finalRerankTopM ?? DEFAULT_SETTINGS.finalRerankTopM, MIN_FINAL_RERANK_TOP_M, MAX_FINAL_RERANK_TOP_M, DEFAULT_SETTINGS.finalRerankTopM),
     searchBudgetSeconds: clampedCount(budget, MIN_BUDGET_SECONDS, MAX_BUDGET_SECONDS, DEFAULT_SETTINGS.searchBudgetSeconds),
   };
 }
 
-export function validateSettings(value: Partial<ExtensionSettings>): ExtensionSettings {
+export function validateSettings(value: StoredExtensionSettings): ExtensionSettings {
   const settings = normalizeSettings(value);
   if (!settings.llmApiKey) throw new Error('请先填写模型 API key');
   if (!settings.llmModel) throw new Error('请先填写模型名称');

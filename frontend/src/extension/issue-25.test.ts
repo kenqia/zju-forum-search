@@ -50,7 +50,7 @@ describe('issue #25 retrieval waves', () => {
       }),
     };
 
-    const result = await new SearchSession({ planner, source, sleep: async () => undefined, intentFilterEnabled: false }).run('资料', 20, 30);
+    const result = await new SearchSession({ planner, source, sleep: async () => undefined, finalRerankEnabled: false }).run('资料', 20, 30);
 
     expect(calls.slice(0, 5)).toEqual(['首词:first', '次词:first', '新词:first', '首词:page-2', '次词:page-2']);
     expect(feedbackCalls[0].candidates).toHaveLength(8);
@@ -92,7 +92,7 @@ describe('issue #25 retrieval waves', () => {
     };
 
     const result = await new SearchSession({
-      planner, source, sleep: async () => undefined, intentFilterEnabled: false,
+      planner, source, sleep: async () => undefined, finalRerankEnabled: false,
       onUpdate: (snapshot) => snapshots.push(snapshot),
     }).run('资料', 10, 30);
 
@@ -119,7 +119,7 @@ describe('issue #25 retrieval waves', () => {
         : { hits: [hit('same', '相同候选', 1)], nextCursor: 'p2' }),
     };
 
-    const result = await new SearchSession({ planner, source, sleep: async () => undefined, intentFilterEnabled: false }).run('资料', 10, 30);
+    const result = await new SearchSession({ planner, source, sleep: async () => undefined, finalRerankEnabled: false }).run('资料', 10, 30);
 
     expect(planner.planFeedback).toHaveBeenCalledOnce();
     expect(result.stopReason).toBe('no_new_candidates');
@@ -147,7 +147,7 @@ describe('issue #25 retrieval waves', () => {
         : { hits: [hit('only', '原始标题', 1)], nextCursor: 'p2' }),
     };
 
-    const result = await new SearchSession({ planner, source, sleep: async () => undefined, intentFilterEnabled: false }).run('资料', 10, 30);
+    const result = await new SearchSession({ planner, source, sleep: async () => undefined, finalRerankEnabled: false }).run('资料', 10, 30);
 
     expect(planner.planFeedback).toHaveBeenCalledTimes(2);
     expect(result.results.map((candidate) => candidate.id)).toEqual(['only']);
@@ -166,7 +166,7 @@ describe('issue #25 retrieval waves', () => {
         capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } as const,
         search: async () => ({ hits: [hit('one')] }),
       },
-      sleep: async () => undefined, intentFilterEnabled: false,
+      sleep: async () => undefined, finalRerankEnabled: false,
     }).run('资料', 1, 30);
 
     expect(planFeedback).toHaveBeenCalledOnce();
@@ -174,13 +174,13 @@ describe('issue #25 retrieval waves', () => {
   });
 
   it('stops on feedback failure, keeps active results, and does not call the final model stage', async () => {
-    const screenResults = vi.fn(async () => ({ removeKeys: [] }));
+    const rerankResults = vi.fn(async () => ({ orderedKeys: [], removeKeys: [] }));
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => plan,
         planBlindExpansion: vi.fn(),
         planFeedback: async () => { throw new SearchSessionError('反馈模型调用超过 20 秒，已保留当前结果。', 'model_timeout'); },
-        screenResults,
+        rerankResults,
       },
       source: {
         sourceId: 'cc98', ratePolicy: { maxSearchCalls: 10, minRequestIntervalMs: 0 },
@@ -194,7 +194,7 @@ describe('issue #25 retrieval waves', () => {
 
     expect(result.results.map((candidate) => candidate.id)).toEqual(['kept']);
     expect(result.stopReason).toBe('model_timeout');
-    expect(screenResults).not.toHaveBeenCalled();
+    expect(rerankResults).not.toHaveBeenCalled();
   });
 });
 

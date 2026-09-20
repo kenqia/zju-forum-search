@@ -5,7 +5,7 @@ import panelCss from './panel.css?inline';
 import { sourceRegistry } from './source-registry';
 import type { FeedbackInput } from './planner';
 import { SearchSession, SearchSessionError, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type ModelQueryPlan, type PublicExtensionSettings, type ScreeningPlan, type ScreeningRequestInput } from './types';
+import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type FinalRerankPlan, type FinalRerankRequestInput, type ModelQueryPlan, type PublicExtensionSettings } from './types';
 
 export interface RuntimeMessenger {
   send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
@@ -65,12 +65,12 @@ class BackgroundPlanner implements SearchPlanner {
     if (!response.ok) throw responseError(response, '反馈模型调用超过 20 秒，已保留当前结果。');
     return response.feedback;
   }
-  private async requestScreening(input: ScreeningRequestInput, signal?: AbortSignal): Promise<ScreeningPlan> {
+  private async requestFinalRerank(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const response = await this.withCancellation(this.runtime.send({ type: 'planner:screen', requestId, input, capabilities: this.capabilities }), requestId, signal);
-    if (!response.ok) throw responseError(response, '筛选模型调用超过 20 秒，已保留当前结果。');
-    return response.screening;
+    const response = await this.withCancellation(this.runtime.send({ type: 'planner:rerank', requestId, input, capabilities: this.capabilities }), requestId, signal);
+    if (!response.ok) throw responseError(response, '最终列表重排超过 20 秒，已保留本地预排序。');
+    return response.rerank;
   }
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
     return this.requestPlan('planner:first', query, signal);
@@ -81,8 +81,8 @@ class BackgroundPlanner implements SearchPlanner {
   planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
     return this.requestFeedback(input, signal);
   }
-  screenResults(input: ScreeningRequestInput, signal?: AbortSignal): Promise<ScreeningPlan> {
-    return this.requestScreening(input, signal);
+  rerankResults(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {
+    return this.requestFinalRerank(input, signal);
   }
 }
 
@@ -94,7 +94,7 @@ const EMPTY_SNAPSHOT: SearchSnapshot = {
   query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
   activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
   softIsolatedResults: [],
-  outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每个检索波次后更新。', screening: 'idle',
+  outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每个检索波次后更新。', finalRerank: 'idle',
 };
 
 function SettingsPanel({ runtime, settings, onSettings }: {
@@ -139,19 +139,22 @@ function SettingsPanel({ runtime, settings, onSettings }: {
       <label>单次反馈证据数量
         <input type="number" min="10" max="100" value={draft.feedbackEvidenceLimit} onChange={(event) => setDraft({ ...draft, feedbackEvidenceLimit: Number(event.target.value) })} required />
       </label>
+      <label>最终列表重排 Top-M
+        <input aria-label="最终列表重排 Top-M" type="number" min="10" max="150" value={draft.finalRerankTopM} disabled={!draft.finalRerankEnabled} onChange={(event) => setDraft({ ...draft, finalRerankTopM: Number(event.target.value) })} required />
+      </label>
       <label className="toggle-setting">
         <span className="toggle-copy">
-          <span className="toggle-title" id="intent-filter-title">最终意图筛选</span>
-          <span className="toggle-description" id="intent-filter-description">搜索结束后，让模型按原始查询移除明显无关的结果。</span>
+          <span className="toggle-title" id="final-rerank-title">最终列表重排</span>
+          <span className="toggle-description" id="final-rerank-description">搜索结束后，让模型调整前排顺序，并移除仍未判断且明确无关的结果。</span>
         </span>
         <input
           className="toggle-input"
           type="checkbox"
           role="switch"
-          aria-labelledby="intent-filter-title"
-          aria-describedby="intent-filter-description"
-          checked={draft.intentFilterEnabled}
-          onChange={(event) => setDraft({ ...draft, intentFilterEnabled: event.target.checked })}
+          aria-labelledby="final-rerank-title"
+          aria-describedby="final-rerank-description"
+          checked={draft.finalRerankEnabled}
+          onChange={(event) => setDraft({ ...draft, finalRerankEnabled: event.target.checked })}
         />
         <span className="toggle-control" aria-hidden="true" />
       </label>
@@ -195,7 +198,7 @@ export function SearchStatus({ snapshot, running, onStop }: {
   onStop(): void;
 }) {
   return <>
-    <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' || snapshot.screening === 'failed' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
+    <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' || snapshot.finalRerank === 'failed' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
     {running && <div className="run-actions"><button className="secondary" type="button" onClick={onStop}>停止并查看结果</button></div>}
   </>;
 }
@@ -227,7 +230,8 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
       const nextSession = new SearchSession({
         planner: createBackgroundPlanner(runtime, source.capabilities),
         source,
-        intentFilterEnabled: settings.intentFilterEnabled,
+        finalRerankEnabled: settings.finalRerankEnabled,
+        finalRerankTopM: settings.finalRerankTopM,
         onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
       });
       controller.session = nextSession;

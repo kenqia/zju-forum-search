@@ -2,16 +2,16 @@ import { sourceRegistry } from './source-registry';
 import { PlannerClient, PlannerError, type FeedbackInput, type PlannerTransport } from './planner';
 import { chatCompletionsUrl, modelHostPermission, normalizeSettings, validateSettings } from './settings';
 import {
-  DEFAULT_SETTINGS,
   MODEL_MAX_COMPLETION_TOKENS,
   MODEL_TIMEOUT_MS,
   type ExtensionRequest,
   type ExtensionSettings,
+  type StoredExtensionSettings,
   type SourceCapabilities,
 } from './types';
 
 export interface SettingsStorage {
-  get(): Promise<Partial<ExtensionSettings>>;
+  get(): Promise<StoredExtensionSettings>;
   set(settings: ExtensionSettings): Promise<void>;
 }
 
@@ -54,6 +54,23 @@ function isSourceCapabilities(value: unknown): value is SourceCapabilities {
     && ['time-desc', 'other'].includes(capabilities.resultOrdering);
 }
 
+function isFinalRerankInput(value: unknown): value is import('./types').FinalRerankRequestInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const input = value as Record<string, unknown>;
+  if (typeof input.query !== 'string' || !Array.isArray(input.candidates)
+    || input.candidates.length < 2 || input.candidates.length > 150) return false;
+  return input.candidates.every((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+    const item = candidate as Record<string, unknown>;
+    return typeof item.key === 'string' && Boolean(item.key)
+      && typeof item.title === 'string'
+      && (item.author === undefined || typeof item.author === 'string')
+      && (item.publishedAt === undefined || typeof item.publishedAt === 'string')
+      && (item.section === undefined || typeof item.section === 'string')
+      && (item.replyCount === undefined || (typeof item.replyCount === 'number' && Number.isFinite(item.replyCount)));
+  });
+}
+
 function isExtensionRequest(message: unknown): message is ExtensionRequest {
   if (!message || typeof message !== 'object') return false;
   const value = message as Record<string, unknown>;
@@ -66,8 +83,8 @@ function isExtensionRequest(message: unknown): message is ExtensionRequest {
   if (value.type === 'planner:feedback') {
     return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object';
   }
-  if (value.type === 'planner:screen') {
-    return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object';
+  if (value.type === 'planner:rerank') {
+    return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && isFinalRerankInput(value.input);
   }
   return false;
 }
@@ -161,7 +178,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
     void (async () => {
       try {
         if (type === 'settings:get') {
-          const settings = normalizeSettings({ ...DEFAULT_SETTINGS, ...await dependencies.storage.get() });
+          const settings = normalizeSettings(await dependencies.storage.get());
           sendResponse({ ok: true, settings: publicSettings(settings) });
           return;
         }
@@ -170,14 +187,14 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
           if (!requested.llmModel) throw new Error('请先填写模型名称');
           const permission = modelHostPermission(requested.llmBaseUrl);
           if (!await dependencies.requestPermission(permission)) throw new Error('未授予模型主机访问权限，设置没有保存');
-          const stored = normalizeSettings({ ...DEFAULT_SETTINGS, ...await dependencies.storage.get() });
+          const stored = normalizeSettings(await dependencies.storage.get());
           const settings = validateSettings({ ...requested, llmApiKey: requested.llmApiKey || stored.llmApiKey });
           await dependencies.storage.set(settings);
           sendResponse({ ok: true, settings: publicSettings(settings) });
           return;
         }
 
-        const settings = validateSettings({ ...DEFAULT_SETTINGS, ...await dependencies.storage.get() });
+        const settings = validateSettings(await dependencies.storage.get());
         const planner = new PlannerClient(transport, settings, request.capabilities);
         if (type === 'planner:first') {
           sendResponse({ ok: true, plan: await planner.planFirstRound(request.query, plannerController!.signal) });
@@ -186,7 +203,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         } else if (type === 'planner:feedback') {
           sendResponse({ ok: true, feedback: await planner.planFeedback(request.input as FeedbackInput, plannerController!.signal) });
         } else {
-          sendResponse({ ok: true, screening: await planner.screenResults(request.input as import('./types').ScreeningRequestInput, plannerController!.signal) });
+          sendResponse({ ok: true, rerank: await planner.rerankResults(request.input as import('./types').FinalRerankRequestInput, plannerController!.signal) });
         }
         plannerControllers.delete(request.requestId);
       } catch (error) {
@@ -204,7 +221,7 @@ function browserDependencies(chromeApi: ChromeApi): BackgroundDependencies {
       get: () => new Promise((resolve, reject) => {
         chromeApi.storage.local.get('settings', (value) => {
           if (chromeApi.runtime.lastError) reject(new Error('读取扩展设置失败'));
-          else resolve((value.settings as Partial<ExtensionSettings>) ?? {});
+          else resolve((value.settings as StoredExtensionSettings) ?? {});
         });
       }),
       set: (settings) => new Promise((resolve, reject) => {

@@ -5,7 +5,7 @@ import { rankAndFilterCandidates, type RankedCandidateView } from './ranking';
 import { mergeHits } from './retrieval';
 import { createFeedbackInput } from './feedback-payload';
 import { applyFeedbackJudgments, selectFeedbackEvidence } from './feedback-evidence';
-import { runFinalScreening } from './screening';
+import { applyFinalRerankPlan, createFinalRerankSelection, type FinalRerankSelection } from './final-reranking';
 import { PaginationCursorGuard, pagePredatesStart } from './pagination';
 import {
   SourceError,
@@ -32,7 +32,7 @@ export type SearchStopReason =
 
 export interface SearchSnapshot {
   query: string;
-  phase: 'planning' | 'searching' | 'feedback' | 'screening' | 'complete';
+  phase: 'planning' | 'searching' | 'feedback' | 'reranking' | 'complete';
   round: number;
   requestsMade: number;
   plan: ModelQueryPlan | null;
@@ -46,14 +46,14 @@ export interface SearchSnapshot {
   planningNotice: string;
   stopReason: SearchStopReason | null;
   statusText: string;
-  screening: 'idle' | 'running' | 'done' | 'failed';
+  finalRerank: 'idle' | 'running' | 'done' | 'failed' | 'cancelled';
 }
 
 export interface SearchPlanner {
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan>;
   planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan>;
   planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan>;
-  screenResults?(input: import('./types').ScreeningRequestInput, signal?: AbortSignal): Promise<import('./types').ScreeningPlan>;
+  rerankResults?(input: import('./types').FinalRerankRequestInput, signal?: AbortSignal): Promise<import('./types').FinalRerankPlan>;
 }
 
 export interface SearchSessionDependencies {
@@ -61,7 +61,8 @@ export interface SearchSessionDependencies {
   source: SearchSourceSession;
   sleep?: (milliseconds: number) => Promise<void>;
   onUpdate?: (snapshot: SearchSnapshot) => void;
-  intentFilterEnabled?: boolean;
+  finalRerankEnabled?: boolean;
+  finalRerankTopM?: number;
 }
 
 export class SearchSessionError extends Error {
@@ -92,14 +93,15 @@ export class SearchSession {
   private readonly source: SearchSourceSession;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly onUpdate?: (snapshot: SearchSnapshot) => void;
-  private readonly intentFilterEnabled: boolean;
+  private readonly finalRerankEnabled: boolean;
+  private readonly finalRerankTopM: number;
   private controller = new AbortController();
-  private screeningController: AbortController | null = null;
+  private rerankController: AbortController | null = null;
   private requestedStop: SearchStopReason | null = null;
   private snapshot: SearchSnapshot = {
     query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
     activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [], softIsolatedResults: [],
-    outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '', screening: 'idle',
+    outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '', finalRerank: 'idle',
   };
 
   constructor(dependencies: SearchSessionDependencies) {
@@ -107,13 +109,14 @@ export class SearchSession {
     this.source = dependencies.source;
     this.sleep = dependencies.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.onUpdate = dependencies.onUpdate;
-    this.intentFilterEnabled = dependencies.intentFilterEnabled ?? true;
+    this.finalRerankEnabled = dependencies.finalRerankEnabled ?? true;
+    this.finalRerankTopM = dependencies.finalRerankTopM ?? 30;
   }
 
   stop(reason: 'user_stopped' | 'replaced' = 'user_stopped'): void {
     this.requestedStop = reason;
     this.controller.abort();
-    if (reason === 'replaced') this.screeningController?.abort();
+    this.rerankController?.abort();
   }
 
   private publish(patch: Partial<SearchSnapshot> = {}): void {
@@ -126,17 +129,19 @@ export class SearchSession {
     return this.snapshot;
   }
 
-  /**
-   * End path: intent screening runs on normal stops and user stops when it is
-   * enabled and results exist. Zero-result and replaced runs skip it.
-   */
+  /** 正常收尾和用户停止时，对至少两条主结果候选执行一次最终列表重排；被新查询替换时跳过。 */
   private async finish(
     reason: SearchStopReason,
     context: { view: RankedCandidateView; entries: RetrievedCandidate[]; query: string },
     statusText = stopReasonText(reason),
   ): Promise<SearchSnapshot> {
-    if (reason !== 'replaced' && context.view.results.length > 0 && this.intentFilterEnabled && this.planner.screenResults) {
-      await this.screen(context.view, context.entries, context.query);
+    const mayRerank = reason === 'model_stop' || reason === 'no_new_candidates' || reason === 'no_new_searches'
+      || reason === 'request_limit' || reason === 'user_stopped';
+    const selection = mayRerank && this.finalRerankEnabled && this.planner.rerankResults
+      ? createFinalRerankSelection(context.query, context.view.results, context.entries, this.finalRerankTopM)
+      : null;
+    if (selection) {
+      await this.rerank(context.view, selection);
       if (this.requestedStop === 'replaced') return this.finishSync('replaced');
       this.publish({
         phase: 'complete',
@@ -148,40 +153,29 @@ export class SearchSession {
     return this.finishSync(reason, statusText);
   }
 
-  /**
-   * Multi-batch intent screening: every recalled candidate enters exactly one
-   * batch; removal keys merge only after all batches succeed. Any failure,
-   * timeout, cancellation, or invalid payload discards every suggestion and
-   * keeps the pre-screening list.
-   */
-  private async screen(view: RankedCandidateView, entries: RetrievedCandidate[], query: string): Promise<void> {
-    this.screeningController = new AbortController();
+  /** 原子应用一次列表响应；失败、超时、取消或非法负载都完整保留本地预排序。 */
+  private async rerank(view: RankedCandidateView, selection: FinalRerankSelection): Promise<void> {
+    this.rerankController = new AbortController();
     try {
-      const outcome = await runFinalScreening({
-        query,
-        candidates: entries.map((entry) => entry.candidate),
-        visibleResults: view.results,
-        signal: this.screeningController.signal,
-        onStart: (batchCount) => this.publish({
-          phase: 'screening', screening: 'running', statusText: `正在筛选 ${entries.length} 条候选，共 ${batchCount} 批。全部成功后统一应用结果…`,
-        }),
-        onProgress: (completedBatchCount, batchCount) => this.publish({
-          phase: 'screening', screening: 'running',
-          statusText: `已完成 ${completedBatchCount}/${batchCount} 批候选筛选。全部成功后统一应用结果…`,
-        }),
-        request: (batch, signal) => this.planner.screenResults!(batch, signal),
-      });
+      this.publish({ phase: 'reranking', finalRerank: 'running', statusText: `正在重排本地预排序前 ${selection.input.candidates.length} 条结果…` });
+      const plan = await this.planner.rerankResults!(selection.input, this.rerankController.signal);
       if (this.requestedStop === 'replaced') return;
+      const outcome = applyFinalRerankPlan(view.results, selection, plan);
       this.publish({
         results: outcome.results,
-        screening: 'done',
-        statusText: `意图筛选完成，移除了 ${outcome.removedCount} 条结果。`,
+        finalRerank: 'done',
+        statusText: `最终列表重排完成，移除了 ${outcome.removedCount} 条结果。`,
       });
     } catch {
       if (this.requestedStop === 'replaced') return;
-      this.publish({ phase: 'complete', screening: 'failed', statusText: '意图筛选未完成，已保留筛选前结果。' });
+      const cancelled = this.requestedStop === 'user_stopped' && this.rerankController.signal.aborted;
+      this.publish({
+        phase: 'complete',
+        finalRerank: cancelled ? 'cancelled' : 'failed',
+        statusText: cancelled ? '已取消最终列表重排，保留本地预排序。' : '最终列表重排未完成，已保留本地预排序。',
+      });
     } finally {
-      this.screeningController = null;
+      this.rerankController = null;
     }
   }
 
@@ -295,6 +289,8 @@ export class SearchSession {
             continuations.set(searchKey, { search: current.search, cursor: page.nextCursor! });
           }
         }
+
+        if (this.requestedStop) return this.finish(this.requestedStop, runContext());
 
         const view = candidateView();
         this.publish({

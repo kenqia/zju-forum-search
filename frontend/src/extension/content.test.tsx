@@ -40,7 +40,7 @@ describe('extension content UI', () => {
       activeSearches: [], executedSearches: ['计算机网络', '计网'], inactiveSearches: ['计网'],
       learnedTerms: ['网络原理'], results: [], outOfRangeCount: 0,
       softIsolatedResults: [],
-      planningNotice: '模型计划无效，已直接搜索原词。', stopReason: 'model_stop', statusText: '完成', screening: 'idle',
+      planningNotice: '模型计划无效，已直接搜索原词。', stopReason: 'model_stop', statusText: '完成', finalRerank: 'idle',
     };
 
     await act(async () => {
@@ -72,30 +72,29 @@ describe('extension content UI', () => {
     });
   });
 
-  it('renders screening progress, success, and failure states', async () => {
+  it('呈现最终列表重排的进行中、成功和失败状态', async () => {
     const container = document.createElement('div');
     const root = createRoot(container);
     const base: SearchSnapshot = {
-      query: '资料', phase: 'screening', round: 1, requestsMade: 1, plan: null,
+      query: '资料', phase: 'reranking', round: 1, requestsMade: 1, plan: null,
       activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
       softIsolatedResults: [],
       outOfRangeCount: 0, planningNotice: '', stopReason: null,
-      statusText: '已完成 2/7 批候选筛选。全部成功后统一应用结果…', screening: 'running',
+      statusText: '正在重排本地预排序前 30 条结果…', finalRerank: 'running',
     };
 
     await act(async () => root.render(<SearchStatus snapshot={base} running onStop={vi.fn()} />));
-    expect(container.textContent).toContain('已完成 2/7 批候选筛选');
-    expect(container.textContent).toContain('全部成功后统一应用结果');
+    expect(container.textContent).toContain('正在重排本地预排序前 30 条结果');
 
-    await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', screening: 'done', statusText: '模型停止。意图筛选完成。' }} running={false} onStop={vi.fn()} />));
-    expect(container.textContent).toContain('意图筛选完成');
+    await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', finalRerank: 'done', statusText: '模型停止。最终列表重排完成。' }} running={false} onStop={vi.fn()} />));
+    expect(container.textContent).toContain('最终列表重排完成');
 
-    await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', screening: 'failed', statusText: '意图筛选未完成。' }} running={false} onStop={vi.fn()} />));
-    expect(container.querySelector('.status.error')?.textContent).toContain('意图筛选未完成');
+    await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', finalRerank: 'failed', statusText: '最终列表重排未完成。' }} running={false} onStop={vi.fn()} />));
+    expect(container.querySelector('.status.error')?.textContent).toContain('最终列表重排未完成');
     await act(async () => root.unmount());
   });
 
-  it('renders grade 0 candidates in a collapsed section with ordinary original-post links', async () => {
+  it('在折叠区域呈现相关性等级 0 候选及普通原帖链接', async () => {
     const container = document.createElement('div');
     const root = createRoot(container);
     const topic = { id: 'hidden', title: '可能误判的资料', board: '学习天地', time: '2026-09-20', author: '', replyCount: 2, url: 'https://www.cc98.org/topic/hidden', firstRound: 1 };
@@ -160,12 +159,18 @@ describe('extension content UI', () => {
     expect(root.textContent).toContain('站点检索请求次数上限');
     expect(root.textContent).not.toContain('检索时长');
     expect(root.textContent).toContain('包括分页');
-    const intentFilter = root.querySelector('input[role="switch"]') as HTMLInputElement;
-    expect(intentFilter.checked).toBe(true);
-    expect(intentFilter.getAttribute('aria-labelledby')).toBe('intent-filter-title');
-    expect(intentFilter.getAttribute('aria-describedby')).toBe('intent-filter-description');
-    expect(intentFilter.closest('label')?.textContent).toContain('最终意图筛选');
-    expect(intentFilter.closest('label')?.textContent).toContain('按原始查询移除明显无关的结果');
+    const finalRerank = root.querySelector('input[role="switch"]') as HTMLInputElement;
+    const finalRerankTopM = root.querySelector('input[aria-label="最终列表重排 Top-M"]') as HTMLInputElement;
+    expect(finalRerank.checked).toBe(true);
+    expect(finalRerank.getAttribute('aria-labelledby')).toBe('final-rerank-title');
+    expect(finalRerank.getAttribute('aria-describedby')).toBe('final-rerank-description');
+    expect(finalRerank.closest('label')?.textContent).toContain('最终列表重排');
+    expect(finalRerank.closest('label')?.textContent).toContain('调整前排顺序');
+    expect(finalRerankTopM.value).toBe('30');
+    expect(finalRerankTopM.disabled).toBe(false);
+    await act(async () => finalRerank.click());
+    expect(finalRerankTopM.disabled).toBe(true);
+    expect(finalRerankTopM.value).toBe('30');
     expect(document.querySelector('input[type="password"]')).toBeNull();
 
     await act(async () => {

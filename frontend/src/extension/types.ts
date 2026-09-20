@@ -167,18 +167,35 @@ export interface ExtensionSettings {
   searchRequestLimit: number;
   /** Maximum candidates selected for one feedback call. */
   feedbackEvidenceLimit: number;
-  /** Default-on intent screening after a search finishes; can be disabled in settings. */
-  intentFilterEnabled: boolean;
+  /** Default-on final listwise reranking after a search finishes. */
+  finalRerankEnabled: boolean;
+  /** Number of locally presorted active candidates sent to the final rerank. */
+  finalRerankTopM: number;
   /** Legacy field kept for stored-settings compatibility; no longer limits a run. */
   searchBudgetSeconds: number;
 }
 
 export type PublicExtensionSettings = ExtensionSettings & { hasApiKey?: boolean };
+export type StoredExtensionSettings = Partial<ExtensionSettings> & { intentFilterEnabled?: unknown };
 
 export interface FeedbackRequestInput {
   query: string;
   executedSearches: { query: string; hitCount: number }[];
   candidates: FeedbackCandidate[];
+}
+
+export interface FinalRerankCandidate extends FeedbackEvidence {
+  key: string;
+}
+
+export interface FinalRerankRequestInput {
+  query: string;
+  candidates: FinalRerankCandidate[];
+}
+
+export interface FinalRerankPlan {
+  orderedKeys: string[];
+  removeKeys: string[];
 }
 
 export type ExtensionRequest =
@@ -187,7 +204,7 @@ export type ExtensionRequest =
   | { type: 'planner:first'; requestId: string; query: string; capabilities: SourceCapabilities }
   | { type: 'planner:blind'; requestId: string; query: string; capabilities: SourceCapabilities }
   | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput; capabilities: SourceCapabilities }
-  | { type: 'planner:screen'; requestId: string; input: ScreeningRequestInput; capabilities: SourceCapabilities }
+  | { type: 'planner:rerank'; requestId: string; input: FinalRerankRequestInput; capabilities: SourceCapabilities }
   | { type: 'planner:cancel'; requestId: string };
 
 export type ExtensionFailureCode = 'planner_failed' | 'model_timeout' | 'model_cancelled';
@@ -200,28 +217,10 @@ export type ExtensionResponseFor<Request extends ExtensionRequest> = ExtensionFa
       ? { ok: true; plan: ModelQueryPlan }
       : Request extends { type: 'planner:feedback' }
         ? { ok: true; feedback: FeedbackPlan }
-        : Request extends { type: 'planner:screen' }
-          ? { ok: true; screening: ScreeningPlan }
+        : Request extends { type: 'planner:rerank' }
+          ? { ok: true; rerank: FinalRerankPlan }
         : { ok: true }
 );
-
-export interface ScreeningCandidate {
-  key: string;
-  title: string;
-  author?: string;
-  publishedAt?: string;
-  section?: string;
-  replyCount?: number;
-}
-
-export interface ScreeningRequestInput {
-  query: string;
-  candidates: ScreeningCandidate[];
-}
-
-export interface ScreeningPlan {
-  removeKeys: string[];
-}
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   llmBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -229,7 +228,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   llmModel: 'qwen3.8-27b',
   searchRequestLimit: 30,
   feedbackEvidenceLimit: 30,
-  intentFilterEnabled: true,
+  finalRerankEnabled: true,
+  finalRerankTopM: 30,
   searchBudgetSeconds: 60,
 };
 

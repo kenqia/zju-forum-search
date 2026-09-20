@@ -35,11 +35,27 @@ describe('background message boundary', () => {
   ])('rejects invalid capabilities before calling the model: %j', (capabilities) => {
     const dependencies: BackgroundDependencies = { storage: { get: vi.fn(), set: vi.fn() }, requestPermission: vi.fn(), fetch: vi.fn() };
     const handler = createMessageHandler(dependencies);
-    for (const type of ['planner:first', 'planner:blind', 'planner:feedback']) {
+    for (const type of ['planner:first', 'planner:blind', 'planner:feedback', 'planner:rerank']) {
       expect(handler({ type, requestId: 'invalid', query: '测试', input: {}, capabilities }, vi.fn())).toBe(false);
     }
     expect(dependencies.fetch).not.toHaveBeenCalled();
     expect(dependencies.storage.get).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    undefined,
+    {},
+    { query: '资料', candidates: 'not-an-array' },
+    { query: '资料', candidates: [{ key: 'c0', title: 1 }] },
+    { query: '资料', candidates: Array.from({ length: 151 }, (_, index) => ({ key: `c${index}`, title: '资料' })) },
+  ])('消息边界拒绝非法最终列表重排输入：%j', (input) => {
+    const dependencies: BackgroundDependencies = { storage: { get: vi.fn(), set: vi.fn() }, requestPermission: vi.fn(), fetch: vi.fn() };
+    const handler = createMessageHandler(dependencies);
+    expect(handler({
+      type: 'planner:rerank', requestId: 'invalid-rerank', input,
+      capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' },
+    }, vi.fn())).toBe(false);
+    expect(dependencies.fetch).not.toHaveBeenCalled();
   });
 
   it('requests only the configured model host before persisting settings', async () => {
@@ -50,7 +66,8 @@ describe('background message boundary', () => {
       llmModel: 'model-name',
       searchRequestLimit: 45,
       feedbackEvidenceLimit: 30,
-      intentFilterEnabled: true,
+      finalRerankEnabled: true,
+      finalRerankTopM: 30,
       searchBudgetSeconds: 45,
     };
 
@@ -69,6 +86,28 @@ describe('background message boundary', () => {
 
     expect(response).toMatchObject({ ok: true, settings: { llmApiKey: '', hasApiKey: true } });
     expect(JSON.stringify(response)).not.toContain('fake-key');
+  });
+
+  it('migrates the legacy intent filter switch when loading settings', async () => {
+    const { send } = harness({
+      storage: {
+        get: vi.fn(async () => ({
+          llmBaseUrl: DEFAULT_SETTINGS.llmBaseUrl,
+          llmApiKey: 'fake-key',
+          llmModel: DEFAULT_SETTINGS.llmModel,
+          searchRequestLimit: 30,
+          feedbackEvidenceLimit: 30,
+          searchBudgetSeconds: 60,
+          intentFilterEnabled: false,
+        })),
+        set: vi.fn(),
+      },
+    });
+
+    await expect(send({ type: 'settings:get' })).resolves.toMatchObject({
+      ok: true,
+      settings: { finalRerankEnabled: false, finalRerankTopM: 30 },
+    });
   });
 
   it('keeps the stored API key when the user saves other fields', async () => {
@@ -135,6 +174,25 @@ describe('background message boundary', () => {
       enable_thinking: false,
       max_completion_tokens: 1200,
     });
+  });
+
+  it('校验并转发一次带固定生成限制的最终列表重排请求', async () => {
+    const { dependencies, send } = harness({
+      fetch: vi.fn(async () => new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ ordered_keys: ['c1', 'c0'], remove_keys: [] }) } }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })),
+    });
+
+    await expect(send({
+      type: 'planner:rerank', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' },
+      requestId: 'rerank-1',
+      input: { query: '高数', candidates: [{ key: 'c0', title: '高数' }, { key: 'c1', title: '微积分' }] },
+    })).resolves.toEqual({ ok: true, rerank: { orderedKeys: ['c1', 'c0'], removeKeys: [] } });
+
+    const [, init] = (dependencies.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const requestBody = JSON.parse(String(init.body));
+    expect(requestBody.messages[0].content).toContain('最终列表重排器');
+    expect(requestBody).toMatchObject({ enable_thinking: false, max_completion_tokens: 1200 });
   });
 
   it('reports a model timeout after 20 seconds instead of a connection failure', async () => {

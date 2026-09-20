@@ -7,22 +7,31 @@ import { DEFAULT_SETTINGS, type SourceCapabilities, type FeedbackCandidate } fro
 const capabilities: SourceCapabilities = { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' };
 
 describe('PlannerClient', () => {
-  it('accepts only valid temporary keys from the screening protocol', async () => {
+  it('规范化最终列表重排协议中的排序键和移除键', async () => {
     let wirePayload: Record<string, unknown> = {};
     const client = new PlannerClient({ chatCompletions: async (_settings, messages) => {
       wirePayload = JSON.parse(messages[1].content);
-      return JSON.stringify({ remove_keys: ['r0', 'unknown', 'r0'] });
+      return JSON.stringify({ ordered_keys: ['c1', 'unknown', 'c1'], remove_keys: ['c0', 'unknown', 'c0'] });
     } }, DEFAULT_SETTINGS, capabilities);
 
-    await expect(client.screenResults({ query: '资料', candidates: [{ key: 'r0', title: '高数资料', author: '作者' }] })).resolves.toEqual({ removeKeys: ['r0'] });
-    expect(wirePayload).toEqual({ query: '资料', candidates: [{ key: 'r0', title: '高数资料', author: '作者', board: '', time: '', reply_count: 0 }] });
+    await expect(client.rerankResults({
+      query: '资料',
+      candidates: [{ key: 'c0', title: '高数资料', author: '作者' }, { key: 'c1', title: '微积分资料' }],
+    })).resolves.toEqual({ orderedKeys: ['c1'], removeKeys: ['c0'] });
+    expect(wirePayload).toEqual({
+      query: '资料',
+      candidates: [
+        { key: 'c0', title: '高数资料', author: '作者', board: '', time: '', reply_count: 0 },
+        { key: 'c1', title: '微积分资料', author: '', board: '', time: '', reply_count: 0 },
+      ],
+    });
   });
 
   it.each([
-    {}, { remove_keys: 'r0' }, { remove_keys: [1] }, { remove_keys: [], reasoning: 'extra' },
-  ])('rejects an invalid screening response: %j', async (response) => {
+    {}, [], { reasoning: 'unknown' }, { ordered_keys: 'c0' }, { remove_keys: [1] },
+  ])('拒绝无法识别的最终列表重排响应：%j', async (response) => {
     const client = new PlannerClient({ chatCompletions: async () => JSON.stringify(response) }, DEFAULT_SETTINGS, capabilities);
-    await expect(client.screenResults({ query: '资料', candidates: [{ key: 'r0', title: '资料' }] })).rejects.toThrow('模型返回的筛选结构无效');
+    await expect(client.rerankResults({ query: '资料', candidates: [{ key: 'c0', title: '资料' }] })).rejects.toThrow('最终列表重排');
   });
 
   it.each([

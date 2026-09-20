@@ -16,7 +16,8 @@ describe('extension settings', () => {
       llmModel: 'qwen-test',
       searchRequestLimit: 100,
       feedbackEvidenceLimit: 30,
-      intentFilterEnabled: true,
+      finalRerankEnabled: true,
+      finalRerankTopM: 30,
       searchBudgetSeconds: 300,
     });
     expect(modelHostPermission('https://models.example.com/openai/v1')).toBe('https://models.example.com/*');
@@ -32,6 +33,20 @@ describe('extension settings', () => {
     expect(normalizeSettings({ feedbackEvidenceLimit: 1 }).feedbackEvidenceLimit).toBe(10);
     expect(normalizeSettings({ feedbackEvidenceLimit: 101 }).feedbackEvidenceLimit).toBe(100);
     expect(normalizeSettings({ feedbackEvidenceLimit: 42.6 }).feedbackEvidenceLimit).toBe(43);
+  });
+
+  it('最终列表重排 Top-M 默认 30 并限制在 10 至 150', () => {
+    expect(normalizeSettings({}).finalRerankTopM).toBe(30);
+    expect(normalizeSettings({ finalRerankTopM: 1 }).finalRerankTopM).toBe(10);
+    expect(normalizeSettings({ finalRerankTopM: 151 }).finalRerankTopM).toBe(150);
+    expect(normalizeSettings({ finalRerankTopM: 42.6 }).finalRerankTopM).toBe(43);
+  });
+
+  it('migrates the legacy intent filter switch only when the new switch is absent', () => {
+    expect(normalizeSettings({}).finalRerankEnabled).toBe(true);
+    expect(normalizeSettings({ intentFilterEnabled: false })).toMatchObject({ finalRerankEnabled: false, finalRerankTopM: 30 });
+    expect(normalizeSettings({ intentFilterEnabled: false, finalRerankEnabled: true }).finalRerankEnabled).toBe(true);
+    expect(normalizeSettings({ intentFilterEnabled: false, finalRerankEnabled: null as unknown as boolean }).finalRerankEnabled).toBe(true);
   });
 
   it('falls back to the default request limit for invalid values', () => {

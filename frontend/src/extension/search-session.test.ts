@@ -66,7 +66,7 @@ describe('SearchSession', () => {
       ])),
       sleep: async () => undefined,
       onUpdate: (snapshot) => snapshots.push(snapshot),
-      intentFilterEnabled: false,
+      finalRerankEnabled: false,
     });
 
     const result = await session.run('找高数资料', 30);
@@ -683,8 +683,8 @@ describe('issue #22 pagination and early stop', () => {
   });
 });
 
-describe('final intent screening', () => {
-  const screenPlan: ModelQueryPlan = { ...initialPlan, searches: [{ query: '资料', purpose: '' }] };
+describe('最终列表重排', () => {
+  const rerankPlan: ModelQueryPlan = { ...initialPlan, searches: [{ query: '资料', purpose: '' }] };
   const hits = (count: number) => Array.from({ length: count }, (_, index) => ({
     candidate: { sourceId: 'cc98', id: `c-${index}`, title: index === 0 ? '无关广告' : `资料 ${index}`, titleOrigin: 'native' as const, url: 'u', author: 'a', publishedAt: '2026-01-01', section: 's', replyCount: 1 },
     document: { title: '资料', publishedAt: '2026-01-01' }, position: index + 1,
@@ -695,89 +695,107 @@ describe('final intent screening', () => {
     ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 },
     search: vi.fn(async () => ({ hits: hits(count), nextCursor: undefined })),
   });
-  const makePlanner = (screenResults?: (input: { candidates: { key: string }[] }) => Promise<{ removeKeys: string[] }>) => ({
-    planFirstRound: async () => screenPlan,
+  const makePlanner = (rerankResults?: (input: { candidates: { key: string }[] }) => Promise<{ orderedKeys: string[]; removeKeys: string[] }>) => ({
+    planFirstRound: async () => rerankPlan,
     planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
     planBlindExpansion: vi.fn(),
-    ...(screenResults ? { screenResults } : {}),
+    ...(rerankResults ? { rerankResults } : {}),
   });
 
-  it('removes only model-named results and preserves ranking order', async () => {
+  it('对 Top-M 只调用一次，跨相关性等级排序，保护已判断候选并保留尾部顺序', async () => {
+    const rerankResults = vi.fn(async (input: { candidates: { key: string }[] }) => ({
+      orderedKeys: [input.candidates[2].key, input.candidates[1].key, input.candidates[0].key],
+      removeKeys: [input.candidates[0].key, input.candidates[2].key],
+    }));
     const session = new SearchSession({
-      planner: makePlanner(async () => ({ removeKeys: ['r0', 'unknown-key'] })),
-      source: makeSource(), sleep: async () => undefined,
-    });
-    const result = await session.run('资料', 30);
-    expect(result.screening).toBe('done');
-    expect(result.statusText).toContain('模型判断已有足够结果');
-    expect(result.statusText).toContain('意图筛选完成，移除了 1 条结果');
-    expect(result.results.map((r) => r.id)).toEqual(['c-1', 'c-2']);
-  });
-
-  it('splits into multiple batches and merges removal keys atomically', async () => {
-    const seen: string[] = [];
-    const statuses: string[] = [];
-    const session = new SearchSession({
-      planner: makePlanner(async (input) => {
-        seen.push(...input.candidates.map((c) => c.key));
-        return { removeKeys: input.candidates.length ? [input.candidates[0].key] : [] };
-      }),
-      source: makeSource(200), sleep: async () => undefined,
-      onUpdate: (snapshot) => { if (snapshot.screening === 'running') statuses.push(snapshot.statusText); },
-    });
-    const result = await session.run('资料', 30);
-    expect(result.results.length).toBeLessThan(200);
-    expect(result.results.length).toBeGreaterThan(190);
-    expect(new Set(seen).size).toBe(200);
-    expect(statuses[0]).toMatch(/共 \d+ 批/u);
-    expect(statuses.some((status) => /^已完成 1\/\d+ 批候选筛选/u.test(status))).toBe(true);
-    const finalProgress = statuses.at(-1)?.match(/^已完成 (\d+)\/(\d+) 批候选筛选/u);
-    expect(finalProgress?.[1]).toBe(finalProgress?.[2]);
-  });
-
-  it('keeps the full pre-screening list when any batch fails', async () => {
-    let calls = 0;
-    const session = new SearchSession({
-      planner: makePlanner(async () => { calls += 1; if (calls === 2) throw new Error('bad'); return { removeKeys: ['r0'] }; }),
-      source: makeSource(200), sleep: async () => undefined,
-    });
-    const result = await session.run('资料', 30);
-    expect(result.screening).toBe('failed');
-    expect(result.statusText).toContain('模型判断已有足够结果');
-    expect(result.statusText).toContain('意图筛选未完成，已保留筛选前结果');
-    expect(result.results).toHaveLength(200);
-  });
-
-  it('keeps the request-limit reason visible after successful screening', async () => {
-    const session = new SearchSession({
-      planner: makePlanner(async () => ({ removeKeys: [] })),
-      source: {
-        ...makeSource(1),
-        search: vi.fn(async () => ({ hits: hits(1), nextCursor: '20' })),
+      planner: {
+        ...makePlanner(rerankResults),
+        planFeedback: async (input) => ({
+          judgments: [
+            { key: input.candidates[0].key, grade: 3 as const },
+            { key: input.candidates[1].key, grade: 1 as const },
+          ],
+          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+        }),
       },
+      source: makeSource(12), sleep: async () => undefined,
+      finalRerankTopM: 10,
+    });
+    const result = await session.run('资料', 30);
+    expect(rerankResults).toHaveBeenCalledOnce();
+    expect(rerankResults.mock.calls[0][0].candidates).toHaveLength(10);
+    expect(result.finalRerank).toBe('done');
+    expect(result.statusText).toContain('模型判断已有足够结果');
+    expect(result.statusText).toContain('最终列表重排完成，移除了 1 条结果');
+    expect(result.results.map((r) => r.id)).toEqual(['c-1', 'c-0', 'c-3', 'c-4', 'c-5', 'c-6', 'c-7', 'c-8', 'c-9', 'c-10', 'c-11']);
+  });
+
+  it('主结果候选超过 Top-M 时只请求一次', async () => {
+    const rerankResults = vi.fn(async (input: { candidates: { key: string }[] }) => ({
+      orderedKeys: [...input.candidates].reverse().map((candidate) => candidate.key), removeKeys: [],
+    }));
+    const session = new SearchSession({
+      planner: makePlanner(rerankResults), source: makeSource(200), sleep: async () => undefined,
+      finalRerankTopM: 30,
+    });
+    const result = await session.run('资料', 30);
+    expect(rerankResults).toHaveBeenCalledOnce();
+    expect(rerankResults.mock.calls[0][0].candidates).toHaveLength(30);
+    expect(result.results.slice(0, 2).map((candidate) => candidate.id)).toEqual(['c-29', 'c-28']);
+    expect(result.results.slice(30, 33).map((candidate) => candidate.id)).toEqual(['c-30', 'c-31', 'c-32']);
+  });
+
+  it('最终列表重排失败时保留本地预排序', async () => {
+    const session = new SearchSession({
+      planner: makePlanner(async () => { throw new Error('bad'); }),
+      source: makeSource(3), sleep: async () => undefined,
+    });
+    const result = await session.run('资料', 30);
+    expect(result.finalRerank).toBe('failed');
+    expect(result.statusText).toContain('模型判断已有足够结果');
+    expect(result.statusText).toContain('最终列表重排未完成，已保留本地预排序');
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['c-0', 'c-1', 'c-2']);
+  });
+
+  it('来源失败后的部分结果不进入最终列表重排', async () => {
+    const rerankResults = vi.fn(async () => ({ orderedKeys: [], removeKeys: [] }));
+    const source = {
+      ...makeSource(20),
+      search: vi.fn()
+        .mockResolvedValueOnce({ hits: hits(20), nextCursor: 'next' })
+        .mockRejectedValueOnce(new Error('network failed')),
+    };
+    const session = new SearchSession({
+      planner: {
+        ...makePlanner(rerankResults),
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '' }),
+      },
+      source,
       sleep: async () => undefined,
     });
 
-    const result = await session.run('资料', 1);
+    const result = await session.run('资料', 30);
 
-    expect(result.stopReason).toBe('request_limit');
-    expect(result.statusText).toContain('1 次站点检索请求上限');
-    expect(result.statusText).toContain('意图筛选完成');
+    expect(result.stopReason).toBe('failed');
+    expect(result.results).toHaveLength(20);
+    expect(rerankResults).not.toHaveBeenCalled();
   });
 
-  it('screens every recalled candidate, including results hidden by local time filtering', async () => {
-    const seen: string[] = [];
+  it('不发送相关性等级 0 和时间范围外候选', async () => {
+    let seenTitles: string[] = [];
     const session = new SearchSession({
       planner: {
-        planFirstRound: async () => ({ ...screenPlan, timeConstraint: { expression: '2025 年', startDate: '2025-01-01', endDate: '2025-12-31' } }),
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFirstRound: async () => ({ ...rerankPlan, timeConstraint: { expression: '2025 年', startDate: '2025-01-01', endDate: '2025-12-31' } }),
+        planFeedback: async (input) => ({ judgments: [{ key: input.candidates[0].key, grade: 0 as const }], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
-        screenResults: async (input) => { seen.push(...input.candidates.map((candidate) => candidate.key)); return { removeKeys: [] }; },
+        rerankResults: async (input) => { seenTitles = input.candidates.map((candidate) => candidate.title); return { orderedKeys: [], removeKeys: [] }; },
       },
       source: {
         ...makeSource(),
         search: vi.fn(async () => ({ hits: [
-          { candidate: { sourceId: 'cc98', id: 'in-range', title: '资料', titleOrigin: 'native' as const, url: 'u', publishedAt: '2025-06-01' }, document: { title: '资料', publishedAt: '2025-06-01' } },
+          { candidate: { sourceId: 'cc98', id: 'grade-zero', title: '无关', titleOrigin: 'native' as const, url: 'u', publishedAt: '2025-06-01' }, document: { title: '无关', publishedAt: '2025-06-01' } },
+          { candidate: { sourceId: 'cc98', id: 'in-range', title: '资料一', titleOrigin: 'native' as const, url: 'u', publishedAt: '2025-06-01' }, document: { title: '资料一', publishedAt: '2025-06-01' } },
+          { candidate: { sourceId: 'cc98', id: 'in-range-2', title: '资料二', titleOrigin: 'native' as const, url: 'u', publishedAt: '2025-06-01' }, document: { title: '资料二', publishedAt: '2025-06-01' } },
           { candidate: { sourceId: 'cc98', id: 'out-of-range', title: '旧资料', titleOrigin: 'native' as const, url: 'u', publishedAt: '2024-06-01' }, document: { title: '旧资料', publishedAt: '2024-06-01' } },
         ] })),
       },
@@ -786,119 +804,91 @@ describe('final intent screening', () => {
 
     const result = await session.run('2025 年的资料', 30);
 
-    expect(seen).toEqual(['r0', 'r1']);
-    expect(result.results.map((candidate) => candidate.id)).toEqual(['in-range']);
+    expect(seenTitles).toEqual(expect.arrayContaining(['资料一', '资料二']));
+    expect(seenTitles).toHaveLength(2);
+    expect(result.results.map((candidate) => candidate.id)).toEqual(expect.arrayContaining(['in-range', 'in-range-2']));
   });
 
-  it('skips screening when disabled and on replaced runs', async () => {
-    const screen = vi.fn(async () => ({ removeKeys: ['r0'] }));
+  it('关闭重排或主结果候选不足两条时跳过', async () => {
+    const rerank = vi.fn(async () => ({ orderedKeys: [], removeKeys: [] }));
+    const disabledFeedback = vi.fn(async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }));
     const disabled = new SearchSession({
-      planner: makePlanner(screen), source: makeSource(), sleep: async () => undefined,
-      intentFilterEnabled: false,
+      planner: { ...makePlanner(rerank), planFeedback: disabledFeedback }, source: makeSource(3), sleep: async () => undefined,
+      finalRerankEnabled: false,
     });
-    const result = await disabled.run('资料', 30);
-    expect(screen).not.toHaveBeenCalled();
-    expect(result.results).toHaveLength(3);
-
-    const enabled = new SearchSession({
-      planner: makePlanner(screen), source: makeSource(), sleep: async () => undefined,
+    await disabled.run('资料', 30);
+    expect(disabledFeedback).toHaveBeenCalledOnce();
+    const one = new SearchSession({
+      planner: makePlanner(rerank), source: makeSource(1), sleep: async () => undefined,
     });
-    const run = enabled.run('资料', 30);
-    enabled.stop('replaced');
-    const replaced = await run;
-    expect(replaced.stopReason).toBe('replaced');
+    await one.run('资料', 30);
+    expect(rerank).not.toHaveBeenCalled();
   });
 
-  it('sends only whitelisted metadata to the screening model', async () => {
-    let payload: unknown;
-    const session = new SearchSession({
-      planner: {
-        ...makePlanner(),
-        screenResults: async (input) => { payload = input; return { removeKeys: [] }; },
-      },
-      source: {
-        sourceId: 'duo' as const,
-        capabilities: { searchSurface: 'fulltext' as const, querySyntax: 'plain-keyword' as const, resultOrdering: 'other' as const },
-        ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 },
-        search: async () => ({ hits: [{
-          candidate: { sourceId: 'duo', id: 'secret-id', title: '正文派生标题', titleOrigin: 'body-derived' as const, url: 'https://duo/secret', author: '作者', publishedAt: '2026-01-01' },
-          document: { title: '正文', snippet: '本地片段' }, position: 1,
-        }] }),
-      },
-      sleep: async () => undefined,
-    });
-    await session.run('资料', 30);
-    const text = JSON.stringify(payload);
-    expect(text).not.toContain('secret-id');
-    expect(text).not.toContain('正文派生标题');
-    expect(text).not.toContain('https://duo/secret');
-    expect(text).not.toContain('本地片段');
-  });
-});
-
-describe('screening cancellation boundaries', () => {
-  const plan: ModelQueryPlan = { ...initialPlan, searches: [{ query: '资料', purpose: '' }] };
-  const oneHit = [{
-    candidate: { sourceId: 'cc98', id: 'c-0', title: '资料', titleOrigin: 'native' as const, url: 'u', publishedAt: '2026-01-01' },
-    document: { title: '资料', publishedAt: '2026-01-01' }, position: 1,
-  }];
-  const source = {
-    sourceId: 'cc98' as const,
-    capabilities: { searchSurface: 'title' as const, querySyntax: 'plain-keyword' as const, resultOrdering: 'time-desc' as const },
-    ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 },
-    search: vi.fn(async () => ({ hits: oneHit, nextCursor: undefined })),
-  };
-
-  it('still screens candidates after the user stops the search', async () => {
-    // user_stopped aborts the search controller; screening must use its own
-    // signal so existing candidates still get screened.
-    const screenResults = vi.fn(async () => ({ removeKeys: ['r0'] }));
+  it('用户停止站点检索后重排已有主结果候选', async () => {
+    const rerankResults = vi.fn(async () => ({ orderedKeys: [], removeKeys: [] }));
     let session!: SearchSession;
     session = new SearchSession({
-      planner: {
-        planFirstRound: async () => plan,
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '' }),
-        planBlindExpansion: vi.fn(),
-        screenResults,
-      },
+      planner: makePlanner(rerankResults),
       source: {
-        ...source,
+        ...makeSource(2),
         search: vi.fn(async () => {
-          // Stop inside the first page: the hit still merges, then the run
-          // unwinds into finish('user_stopped') with one candidate present.
           session.stop('user_stopped');
-          return { hits: oneHit, nextCursor: undefined };
+          return { hits: hits(2), nextCursor: undefined };
         }),
       },
       sleep: async () => undefined,
     });
+
     const result = await session.run('资料', 30);
+
     expect(result.stopReason).toBe('user_stopped');
-    expect(screenResults).toHaveBeenCalled();
-    expect(result.screening).toBe('done');
-    expect(result.results).toHaveLength(0);
+    expect(rerankResults).toHaveBeenCalledOnce();
   });
 
-  it('cancels an in-flight screen when a new query replaces the run', async () => {
-    let screenSignal: AbortSignal | undefined;
+  it('新查询替换运行时取消进行中的最终列表重排', async () => {
+    let rerankSignal: AbortSignal | undefined;
     const session = new SearchSession({
       planner: {
-        planFirstRound: async () => plan,
+        planFirstRound: async () => rerankPlan,
         planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
-        screenResults: (_input: unknown, signal?: AbortSignal) => {
-          screenSignal = signal;
+        rerankResults: (_input: unknown, signal?: AbortSignal) => {
+          rerankSignal = signal;
           return new Promise((_r, reject) => signal?.addEventListener('abort', () => reject(new DOMException('x', 'AbortError')), { once: true }));
         },
       },
-      source, sleep: async () => undefined,
+      source: makeSource(2), sleep: async () => undefined,
     });
     const run = session.run('资料', 30);
-    // Wait until screening starts, then replace.
+    // Wait until reranking starts, then replace.
     await new Promise((resolve) => setTimeout(resolve, 10));
     session.stop('replaced');
     const result = await run;
     expect(result.stopReason).toBe('replaced');
-    expect(screenSignal?.aborted).toBe(true);
+    expect(rerankSignal?.aborted).toBe(true);
+  });
+
+  it('用户取消进行中的最终列表重排时保留本地预排序', async () => {
+    const session = new SearchSession({
+      planner: {
+        planFirstRound: async () => rerankPlan,
+        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planBlindExpansion: vi.fn(),
+        rerankResults: (_input: unknown, signal?: AbortSignal) => new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('x', 'AbortError')), { once: true });
+        }),
+      },
+      source: makeSource(2), sleep: async () => undefined,
+    });
+    const run = session.run('资料', 30);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.stop('user_stopped');
+
+    const result = await run;
+
+    expect(result.finalRerank).toBe('cancelled');
+    expect(result.statusText).toContain('已取消最终列表重排，保留本地预排序');
+    expect(result.results.map((candidate) => candidate.id)).toEqual(['c-0', 'c-1']);
   });
 });
