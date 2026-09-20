@@ -33,9 +33,9 @@ describe('Duo through the unchanged search core', () => {
     expect(fetch).toHaveBeenCalledOnce();
     expect(messages).toHaveLength(3);
     expect(messages[0][0].content).toContain('匹配全文');
-    expect(JSON.parse(messages[1][1].content).new_candidates).toEqual([
-      { title: '', author: '作者甲', board: '', time: '', reply_count: 0 },
-      { title: '', author: '作者乙', board: '', time: '', reply_count: 0 },
+    expect(JSON.parse(messages[1][1].content).candidates).toEqual([
+      { key: 'c1', matched_queries: ['校园合成词'], title: '', author: '作者乙', board: '', time: '', reply_count: 0 },
+      { key: 'c0', matched_queries: ['校园合成词'], title: '', author: '作者甲', board: '', time: '', reply_count: 0 },
     ]);
     expect(messages[1][1].content).not.toContain('正文只供本地匹配');
   });

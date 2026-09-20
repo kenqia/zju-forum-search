@@ -186,10 +186,20 @@ export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
   };
 }
 
-export function normalizeFeedbackPlan(raw: unknown): FeedbackPlan {
+export function normalizeFeedbackPlan(raw: unknown, validKeys?: Set<string>): FeedbackPlan {
   const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const newSearches = searchList(source.new_searches);
+  const judgments = new Map<string, 0 | 1 | 2 | 3>();
+  if (Array.isArray(source.judgments)) {
+    for (const item of source.judgments) {
+      if (!isRecord(item)) continue;
+      const key = normalizeText(item.key);
+      if (key && (!validKeys || validKeys.has(key))
+        && (item.grade === 0 || item.grade === 1 || item.grade === 2 || item.grade === 3)) judgments.set(key, item.grade);
+    }
+  }
   return {
+    judgments: [...judgments].map(([key, grade]) => ({ key, grade })),
     newSearches,
     learnedTerms: textList(source.learned_terms),
     stopSuggestions: textList(source.stop_suggestions),
@@ -213,14 +223,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assertFeedbackShape(value: unknown): asserts value is Record<string, unknown> {
   if (!isRecord(value)
+    || (value.judgments !== undefined && !Array.isArray(value.judgments))
     || !Array.isArray(value.new_searches)
     || !value.new_searches.every((item) => isRecord(item) && typeof item.query === 'string' && typeof item.purpose === 'string')
-    || !Array.isArray(value.learned_terms)
-    || !value.learned_terms.every((term) => typeof term === 'string')
-    || !Array.isArray(value.stop_suggestions)
-    || !value.stop_suggestions.every((term) => typeof term === 'string')
+    || (value.learned_terms !== undefined && (!Array.isArray(value.learned_terms) || !value.learned_terms.every((term) => typeof term === 'string')))
+    || (value.stop_suggestions !== undefined && (!Array.isArray(value.stop_suggestions) || !value.stop_suggestions.every((term) => typeof term === 'string')))
     || typeof value.should_stop !== 'boolean'
-    || typeof value.reasoning !== 'string') {
+    || (value.reasoning !== undefined && typeof value.reasoning !== 'string')) {
     throw new PlannerError('模型返回的反馈计划结构无效');
   }
 }
@@ -287,19 +296,21 @@ ${sourceInstructions(capabilities)}
 }
 
 export function feedbackSystemPrompt(capabilities: SourceCapabilities): string {
-  return `你是迭代检索的反馈规划器。
+  return `你是迭代检索的语义反馈规划器。
 ${sourceInstructions(capabilities)}
-你会看到上一轮搜索新发现的候选元数据（仅原生标题、作者、发布时间、板块、回复数），以及已执行检索词及其命中情况。据此产出下一轮检索词。
+你会看到本检索波次选出的候选临时键、最多三个不同检索支持，以及白名单元数据（仅原生标题、作者、发布时间、板块、回复数）。一次完成相关性判断、下一轮检索词和停止判断。
 正文和命中片段不会提供给你。正文派生的显示标题也不会发送，反馈标题为空。没有原生标题时，只能依据查询、检索命中数和其他允许的元数据决定后续搜索；不得推测正文或声称从正文学习到了词汇。
 
 规则：
+- 给每个能判断的候选返回 0、1、2 或 3：3 明确高度相关，2 大概率相关，1 信息不足、部分相关或不确定，0 明确无关。拿不准时用 1。
 - 只追加新检索词或建议停用已执行且零命中的词；不得修改首轮确定的必须概念、排除词、时间约束。
-- 仅当提供非空原生标题时，学习其中反复出现而你没想到的词汇（简称、行话、专有名词），转化为可执行检索词。
+- 只有 grade 2 或 grade 3 候选可以指导查询扩展；不得从 grade 0、grade 1 或未判断候选学习检索词。
 - 若候选已饱和或继续搜索价值低，返回 should_stop: true。
 - 不要重复已执行过的检索词。
 
 返回 JSON：
 {
+  "judgments": [{"key": "候选临时键", "grade": 0}],
   "new_searches": [{"query": "下一轮检索词", "purpose": "补足什么"}],
   "learned_terms": ["从标题学到的词汇"],
   "stop_suggestions": ["建议停用的已执行检索词"],
@@ -351,7 +362,7 @@ export class PlannerClient {
     const content = await this.transport.chatCompletions(this.settings, buildFeedbackMessages(input, this.capabilities, this.today()), signal);
     const raw = parseJson(content);
     assertFeedbackShape(raw);
-    return normalizeFeedbackPlan(raw);
+    return normalizeFeedbackPlan(raw, new Set(input.candidates.map((candidate) => candidate.key)));
   }
 
   async planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {

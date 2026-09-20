@@ -2,7 +2,7 @@ import { FEEDBACK_METADATA_BYTE_LIMIT } from './feedback-payload';
 import { describe, expect, it } from 'vitest';
 
 import { buildFeedbackMessages, localRelativeTimeRange, normalizeModelPlan, PlannerClient, PlannerError } from './planner';
-import { DEFAULT_SETTINGS, type SourceCapabilities, type FeedbackEvidence } from './types';
+import { DEFAULT_SETTINGS, type SourceCapabilities, type FeedbackCandidate } from './types';
 
 const capabilities: SourceCapabilities = { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' };
 
@@ -35,7 +35,7 @@ describe('PlannerClient', () => {
     } }, DEFAULT_SETTINGS, { searchSurface, querySyntax, resultOrdering: 'time-desc' });
     await client.planFirstRound('高数');
     await client.planBlindExpansion('高数');
-    await client.planFeedback({ query: '高数', executedSearches: [], newCandidates: [], round: 1 });
+    await client.planFeedback({ query: '高数', executedSearches: [], candidates: [] });
     for (const prompt of prompts) {
       expect(prompt).toContain({ title: '仅匹配原生标题', fulltext: '匹配全文', mixed: '匹配标题和正文' }[searchSurface]);
       expect(prompt).toContain(querySyntax === 'plain-keyword' ? '普通关键词' : '支持布尔查询语法');
@@ -67,7 +67,7 @@ describe('PlannerClient', () => {
 
     await client.planFirstRound('近三年的微积分资料');
     await client.planBlindExpansion('近三年的微积分资料');
-    await client.planFeedback({ query: '近三年的微积分资料', executedSearches: [], newCandidates: [], round: 1 });
+    await client.planFeedback({ query: '近三年的微积分资料', executedSearches: [], candidates: [] });
 
     expect(payloads).toEqual([
       { query: '近三年的微积分资料', current_date: '2026-09-15' },
@@ -257,17 +257,18 @@ describe('feedback privacy boundary', () => {
       body: '正文不得出域',
       replies: ['回帖不得出域'],
       authorization: 'Bearer secret',
-    } as FeedbackEvidence & Record<string, unknown>;
+      key: 'c0', matchedQueries: ['高数'],
+    } as FeedbackCandidate & Record<string, unknown>;
 
     const messages = buildFeedbackMessages({
       query: '找高数资料',
       executedSearches: [{ query: '高数', hitCount: 1 }],
-      newCandidates: [candidate],
-      round: 1,
+      candidates: [candidate],
     }, capabilities);
     const payload = JSON.parse(messages[1].content);
 
-    expect(payload.new_candidates).toEqual([{
+    expect(payload.candidates).toEqual([{
+      key: 'c0', matched_queries: ['高数'],
       title: '题'.repeat(80),
       author: 'alice',
       board: '学习天地',
@@ -281,15 +282,15 @@ describe('feedback privacy boundary', () => {
 
   it('caps the complete feedback metadata payload conservatively by UTF-8 bytes', () => {
     const candidates = Array.from({ length: 200 }, (_, index) => ({
-      id: String(index), title: `主题-${index}-${'中文'.repeat(80)}`, author: '作者', section: '学习天地',
+      key: `c${index}`, matchedQueries: ['检索词'], title: `主题-${index}-${'中文'.repeat(80)}`, author: '作者', section: '学习天地',
       publishedAt: '2026-09-15', replyCount: index, url: '', retrievalScore: 1, bestRank: index + 1,
       plans: ['检索词'], firstRound: 1,
     }));
 
     const executedSearches = Array.from({ length: 30 }, (_, index) => ({ query: `检索词-${index}-${'中文'.repeat(100)}`, hitCount: index }));
-    const content = buildFeedbackMessages({ query: '测试'.repeat(500), executedSearches, newCandidates: candidates, round: 1 }, capabilities, '2026-09-17')[1].content;
+    const content = buildFeedbackMessages({ query: '测试'.repeat(500), executedSearches, candidates }, capabilities, '2026-09-17')[1].content;
 
     expect(new TextEncoder().encode(content).byteLength).toBeLessThanOrEqual(FEEDBACK_METADATA_BYTE_LIMIT);
-    expect(JSON.parse(content).new_candidates.length).toBeLessThan(candidates.length);
+    expect(JSON.parse(content).candidates.length).toBeLessThan(candidates.length);
   });
 });

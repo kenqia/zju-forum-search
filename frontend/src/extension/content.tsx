@@ -93,7 +93,8 @@ export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities:
 const EMPTY_SNAPSHOT: SearchSnapshot = {
   query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
   activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
-  outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每轮结束后更新。', screening: 'idle',
+  softIsolatedResults: [],
+  outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每个检索波次后更新。', screening: 'idle',
 };
 
 function SettingsPanel({ runtime, settings, onSettings }: {
@@ -135,6 +136,9 @@ function SettingsPanel({ runtime, settings, onSettings }: {
       <label>站点检索请求次数上限
         <input type="number" min="1" max="100" value={draft.searchRequestLimit} onChange={(event) => setDraft({ ...draft, searchRequestLimit: Number(event.target.value) })} required />
       </label>
+      <label>单次反馈证据数量
+        <input type="number" min="10" max="100" value={draft.feedbackEvidenceLimit} onChange={(event) => setDraft({ ...draft, feedbackEvidenceLimit: Number(event.target.value) })} required />
+      </label>
       <label className="toggle-setting">
         <span className="toggle-copy">
           <span className="toggle-title" id="intent-filter-title">最终意图筛选</span>
@@ -166,7 +170,7 @@ export function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
   return <>
     {snapshot.planningNotice && <p className="fallback-notice" role="status">{snapshot.planningNotice}</p>}
     <details>
-    <summary>检索进度 · 第 {snapshot.round || 0} 轮 · {snapshot.requestsMade} 次请求</summary>
+    <summary>检索进度 · 第 {snapshot.round || 0} 个波次 · {snapshot.requestsMade} 次请求</summary>
     <div className="term-group">首轮检索词<div className="chips">{planned.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>
     {snapshot.activeSearches.length > 0 && <div className="term-group">正在执行<div className="chips">{snapshot.activeSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
     {snapshot.executedSearches.length > 0 && <div className="term-group">已执行<div className="chips">{snapshot.executedSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
@@ -227,7 +231,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
         onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
       });
       controller.session = nextSession;
-      await nextSession.run(normalized, settings.searchRequestLimit);
+      await nextSession.run(normalized, settings.searchRequestLimit, settings.feedbackEvidenceLimit);
       if (controller.session === nextSession) controller.session = null;
     } catch (error) {
       if (controller.runId !== currentRun) return;
@@ -250,15 +254,35 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
     <SearchStatus snapshot={snapshot} running={running} onStop={stop} />
     {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
     {snapshot.outOfRangeCount > 0 && <p className="filtered-count">另有 {snapshot.outOfRangeCount} 条范围外结果已忽略。</p>}
-    <div aria-live="polite">
-      {snapshot.results.length === 0
-        ? <div className="empty">{snapshot.phase === 'complete' && snapshot.stopReason === 'no_results' ? '没有找到主题帖。' : '结果将在这里逐轮出现。'}</div>
-        : snapshot.results.map((topic, index) => <article className="result" key={topic.id}>
-          <span className="rank">{index + 1}</span>
-          <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复 · 首次命中第 {topic.firstRound} 轮</p></div>
-        </article>)}
-    </div>
+    <ResultLists
+      results={snapshot.results}
+      softIsolatedResults={snapshot.softIsolatedResults}
+      emptyText={snapshot.phase === 'complete' && snapshot.stopReason === 'no_results' ? '没有找到主题帖。' : '结果将在这里逐轮出现。'}
+    />
   </>;
+}
+
+function ResultCard({ topic, rank }: { topic: import('./types').TopicCandidate; rank?: number }) {
+  return <article className="result">
+    {rank !== undefined && <span className="rank">{rank}</span>}
+    <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复 · 首次命中第 {topic.firstRound} 轮</p></div>
+  </article>;
+}
+
+export function ResultLists({ results, softIsolatedResults, emptyText }: {
+  results: import('./types').TopicCandidate[];
+  softIsolatedResults: import('./types').TopicCandidate[];
+  emptyText: string;
+}) {
+  return <div aria-live="polite">
+    {results.length === 0
+      ? <div className="empty">{emptyText}</div>
+      : results.map((topic, index) => <ResultCard topic={topic} rank={index + 1} key={topic.id} />)}
+    {softIsolatedResults.length > 0 && <details className="soft-isolated">
+      <summary>已隐藏的明确无关结果（{softIsolatedResults.length}）</summary>
+      {softIsolatedResults.map((topic) => <ResultCard topic={topic} key={topic.id} />)}
+    </details>}
+  </div>;
 }
 
 function App({ runtime }: { runtime: RuntimeMessenger }) {

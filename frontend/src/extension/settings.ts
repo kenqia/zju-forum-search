@@ -4,6 +4,8 @@ const MIN_BUDGET_SECONDS = 10;
 const MAX_BUDGET_SECONDS = 300;
 const MIN_REQUEST_LIMIT = 1;
 const MAX_REQUEST_LIMIT = 100;
+const MIN_FEEDBACK_EVIDENCE_LIMIT = 10;
+const MAX_FEEDBACK_EVIDENCE_LIMIT = 100;
 
 function clampedCount(value: unknown, min: number, max: number, fallback: number): number {
   if (typeof value === 'string' && !value.trim()) return fallback;
@@ -37,6 +39,7 @@ export function normalizeSettings(value: Partial<ExtensionSettings>): ExtensionS
     llmApiKey: String(value.llmApiKey ?? '').trim(),
     llmModel: String(value.llmModel ?? '').trim(),
     searchRequestLimit: clampedCount(value.searchRequestLimit ?? DEFAULT_SETTINGS.searchRequestLimit, MIN_REQUEST_LIMIT, MAX_REQUEST_LIMIT, DEFAULT_SETTINGS.searchRequestLimit),
+    feedbackEvidenceLimit: clampedCount(value.feedbackEvidenceLimit ?? DEFAULT_SETTINGS.feedbackEvidenceLimit, MIN_FEEDBACK_EVIDENCE_LIMIT, MAX_FEEDBACK_EVIDENCE_LIMIT, DEFAULT_SETTINGS.feedbackEvidenceLimit),
     intentFilterEnabled: typeof value.intentFilterEnabled === 'boolean' ? value.intentFilterEnabled : DEFAULT_SETTINGS.intentFilterEnabled,
     searchBudgetSeconds: clampedCount(budget, MIN_BUDGET_SECONDS, MAX_BUDGET_SECONDS, DEFAULT_SETTINGS.searchBudgetSeconds),
   };

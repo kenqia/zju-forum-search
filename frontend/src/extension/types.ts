@@ -100,6 +100,12 @@ export interface RetrievedCandidate {
   candidate: Candidate;
   observations: RetrievalObservation[];
   documents: RankingDocument[];
+  /** Opaque, run-local model key; never derived from a platform identifier. */
+  temporaryKey?: string;
+  relevanceGrade?: RelevanceGrade;
+  evidenceRevision?: number;
+  judgedEvidenceRevision?: number;
+  latestIndependentQuery?: string;
 }
 
 export interface FeedbackEvidence {
@@ -108,6 +114,18 @@ export interface FeedbackEvidence {
   publishedAt?: string;
   section?: string;
   replyCount?: number;
+}
+
+export type RelevanceGrade = 0 | 1 | 2 | 3;
+
+export interface FeedbackCandidate extends FeedbackEvidence {
+  key: string;
+  matchedQueries: string[];
+}
+
+export interface FeedbackJudgment {
+  key: string;
+  grade: RelevanceGrade;
 }
 
 export interface SearchSourceSession {
@@ -133,6 +151,7 @@ export interface SearchSourceAdapter {
 export type FeedbackSearch = PlannedSearch;
 
 export interface FeedbackPlan {
+  judgments?: FeedbackJudgment[];
   newSearches: FeedbackSearch[];
   learnedTerms: string[];
   stopSuggestions: string[];
@@ -146,6 +165,8 @@ export interface ExtensionSettings {
   llmModel: string;
   /** Site search calls allowed per run, including pagination. */
   searchRequestLimit: number;
+  /** Maximum candidates selected for one feedback call. */
+  feedbackEvidenceLimit: number;
   /** Default-on intent screening after a search finishes; can be disabled in settings. */
   intentFilterEnabled: boolean;
   /** Legacy field kept for stored-settings compatibility; no longer limits a run. */
@@ -157,8 +178,7 @@ export type PublicExtensionSettings = ExtensionSettings & { hasApiKey?: boolean 
 export interface FeedbackRequestInput {
   query: string;
   executedSearches: { query: string; hitCount: number }[];
-  newCandidates: FeedbackEvidence[];
-  round: number;
+  candidates: FeedbackCandidate[];
 }
 
 export type ExtensionRequest =
@@ -208,6 +228,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   llmApiKey: '',
   llmModel: 'qwen3.8-27b',
   searchRequestLimit: 30,
+  feedbackEvidenceLimit: 30,
   intentFilterEnabled: true,
   searchBudgetSeconds: 60,
 };

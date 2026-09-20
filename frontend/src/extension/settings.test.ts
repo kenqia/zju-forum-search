@@ -15,6 +15,7 @@ describe('extension settings', () => {
       llmApiKey: 'key-value',
       llmModel: 'qwen-test',
       searchRequestLimit: 100,
+      feedbackEvidenceLimit: 30,
       intentFilterEnabled: true,
       searchBudgetSeconds: 300,
     });
@@ -24,6 +25,13 @@ describe('extension settings', () => {
   it('defaults the request limit for fresh installs and legacy settings', () => {
     expect(normalizeSettings({}).searchRequestLimit).toBe(30);
     expect(normalizeSettings({ searchBudgetSeconds: 45 }).searchRequestLimit).toBe(30);
+  });
+
+  it('defaults and clamps the feedback evidence limit to 10 through 100', () => {
+    expect(normalizeSettings({}).feedbackEvidenceLimit).toBe(30);
+    expect(normalizeSettings({ feedbackEvidenceLimit: 1 }).feedbackEvidenceLimit).toBe(10);
+    expect(normalizeSettings({ feedbackEvidenceLimit: 101 }).feedbackEvidenceLimit).toBe(100);
+    expect(normalizeSettings({ feedbackEvidenceLimit: 42.6 }).feedbackEvidenceLimit).toBe(43);
   });
 
   it('falls back to the default request limit for invalid values', () => {

@@ -41,6 +41,10 @@ const initialPlan: ModelQueryPlan = {
   timeConstraint: { expression: '', startDate: null, endDate: null },
 };
 
+const continueFeedback = () => ({
+  judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '',
+});
+
 describe('SearchSession', () => {
   it('runs breadth-first pages, feeds back metadata, and keeps fixed constraints', async () => {
     let firstFeedbackInput: unknown;
@@ -97,12 +101,12 @@ describe('SearchSession', () => {
     expect(calls.slice(0, 3)).toEqual([
       ['高数', 0, 20],
       ['微积分', 0, 20],
-      ['高数', 20, 20],
+      ['工科数学分析', 0, 20],
     ]);
-    expect(calls[3]).toEqual(['工科数学分析', 0, 20]);
+    expect(calls[3]).toEqual(['高数', 20, 20]);
     expect(planner.planFeedback).toHaveBeenCalled();
-    expect(firstFeedbackInput).toMatchObject({ newCandidates: expect.any(Array) });
-    expect((firstFeedbackInput as { newCandidates: unknown[] }).newCandidates[0]).not.toHaveProperty('body');
+    expect(firstFeedbackInput).toMatchObject({ candidates: expect.any(Array) });
+    expect((firstFeedbackInput as { candidates: unknown[] }).candidates[0]).not.toHaveProperty('body');
     expect(result.plan?.requiredConcepts).toEqual(initialPlan.requiredConcepts);
     expect(result.learnedTerms).toContain('工科数学分析');
     expect(result.executedSearches).toEqual(expect.arrayContaining(['高数', '微积分', '工科数学分析', '无人使用的扩展词']));
@@ -114,7 +118,7 @@ describe('SearchSession', () => {
   it('performs one blind expansion after an empty first round', async () => {
     const planner = {
       planFirstRound: vi.fn(async () => ({ ...initialPlan, searches: [{ query: '零命中', purpose: '' }] })),
-      planFeedback: vi.fn(),
+      planFeedback: vi.fn(async () => continueFeedback()),
       planBlindExpansion: vi.fn(async () => ({ ...initialPlan, searches: [{ query: '宽泛词', purpose: '' }] })),
     };
     const session = new SearchSession({
@@ -134,7 +138,7 @@ describe('SearchSession', () => {
   it('enforces the hard request cap', async () => {
     const planner = {
       planFirstRound: vi.fn(async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] })),
-      planFeedback: vi.fn(),
+      planFeedback: vi.fn(async () => continueFeedback()),
       planBlindExpansion: vi.fn(),
     };
     const session = new SearchSession({
@@ -175,7 +179,7 @@ describe('SearchSession', () => {
     session = new SearchSession({
       planner: {
         planFirstRound: async () => initialPlan,
-        planFeedback: vi.fn(),
+        planFeedback: vi.fn(async () => continueFeedback()),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(searchTopics),
@@ -197,7 +201,7 @@ describe('SearchSession', () => {
           planningSignal = signal;
           return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }));
         },
-        planFeedback: vi.fn(),
+        planFeedback: vi.fn(async () => continueFeedback()),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(vi.fn()),
@@ -215,7 +219,7 @@ describe('SearchSession', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
-        planFeedback: vi.fn(),
+        planFeedback: vi.fn(async () => continueFeedback()),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(vi.fn(async () => Array.from({ length: 20 }, (_, index) => ({ id: String(index), title: '高数' })))),
@@ -238,7 +242,7 @@ describe('SearchSession', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
-        planFeedback: vi.fn(),
+        planFeedback: vi.fn(async () => continueFeedback()),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(searchTopics),
@@ -283,7 +287,7 @@ describe('SearchSession', () => {
       planner: {
         planFirstRound: async () => timedPlan,
         planFeedback: async (input) => {
-          feedbackCandidates = input.newCandidates;
+          feedbackCandidates = input.candidates;
           return { newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' };
         },
         planBlindExpansion: vi.fn(),
@@ -357,7 +361,7 @@ describe('SearchSession', () => {
     };
     const planner = {
       planFirstRound: vi.fn(async () => timedPlan),
-      planFeedback: vi.fn(),
+      planFeedback: vi.fn(async () => continueFeedback()),
       planBlindExpansion: vi.fn(async () => ({ ...timedPlan, searches: [{ query: '微积分试卷', purpose: '' }] })),
     };
     const session = new SearchSession({
@@ -397,7 +401,7 @@ describe('opaque source pagination', () => {
     const planner = {
       planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
       planBlindExpansion: async () => ({ ...initialPlan, searches: [] }),
-      planFeedback: vi.fn(),
+      planFeedback: vi.fn(async () => continueFeedback()),
     };
     await new SearchSession({ source, planner, sleep: async () => undefined }).run('高数', 60);
     expect(cursors).toEqual([undefined, '']);
@@ -457,9 +461,9 @@ describe('core feedback privacy', () => {
     });
     const result = await session.run('测试', 60);
     expect(result.results[0].title).toBe('正文派生的秘密标题');
-    expect(planFeedback).toHaveBeenCalledWith({ query: '测试', round: 1,
+    expect(planFeedback).toHaveBeenCalledWith({ query: '测试',
       executedSearches: [{ query: '测试', hitCount: 1 }],
-      newCandidates: [{ title: '', author: '公开作者', publishedAt: '2026-09-17', section: '公开板块', replyCount: 2 }],
+      candidates: [{ key: 'c0', matchedQueries: ['测试'], title: '', author: '公开作者', publishedAt: '2026-09-17', section: '公开板块', replyCount: 2 }],
     }, expect.any(AbortSignal));
   });
 });
@@ -472,7 +476,7 @@ describe('source policy and search budget', () => {
       source: { sourceId: 'example', capabilities: { searchSurface: 'mixed', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' },
         ratePolicy: { maxSearchCalls: 2, minRequestIntervalMs: 7 }, search },
       planner: { planFirstRound: async () => initialPlan,
-        planFeedback: vi.fn(), planBlindExpansion: vi.fn() },
+        planFeedback: vi.fn(async () => continueFeedback()), planBlindExpansion: vi.fn() },
       sleep: async (ms) => { waits.push(ms); },
     }).run('测试', 30);
     expect(result.stopReason).toBe('request_limit');
@@ -488,7 +492,7 @@ describe('source policy and search budget', () => {
         ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 }, search },
       planner: { planFirstRound: async () => ({ ...initialPlan,
           searches: Array.from({ length: 5 }, (_, index) => ({ query: `检索词-${index}`, purpose: '' })) }),
-        planFeedback: vi.fn(), planBlindExpansion: vi.fn() },
+        planFeedback: vi.fn(async () => continueFeedback()), planBlindExpansion: vi.fn() },
       sleep: async () => undefined,
     }).run('测试', 5);
     expect(result.stopReason).toBe('request_limit');
@@ -515,7 +519,7 @@ describe('bounded feedback at the planner port', () => {
         planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '中文', purpose: '' }] }),
         planFeedback: async (input) => {
           received = JSON.stringify(input);
-          count = input.newCandidates.length;
+          count = input.candidates.length;
           return { newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' };
         },
         planBlindExpansion: vi.fn(),
@@ -543,7 +547,7 @@ describe('issue #22 pagination and early stop', () => {
       return { hits };
     });
     const session = new SearchSession({
-      planner: { planFirstRound: async () => timePlan, planFeedback: vi.fn(), planBlindExpansion: vi.fn() },
+      planner: { planFirstRound: async () => timePlan, planFeedback: vi.fn(async () => continueFeedback()), planBlindExpansion: vi.fn() },
       source: { sourceId: 'cc98', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' },
         ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 }, search },
       sleep: async () => undefined,
@@ -555,7 +559,7 @@ describe('issue #22 pagination and early stop', () => {
   it('rejects a repeated cursor instead of looping forever', async () => {
     const search = vi.fn(async () => ({ hits: [{ candidate: { sourceId: 'cc98', id: 'a', title: 'x', titleOrigin: 'native' as const, url: 'u' }, document: { title: 'x' }, position: 1 }], nextCursor: 'same' }));
     const session = new SearchSession({
-      planner: { planFirstRound: async () => timePlan, planFeedback: vi.fn(), planBlindExpansion: vi.fn() },
+      planner: { planFirstRound: async () => timePlan, planFeedback: vi.fn(async () => continueFeedback()), planBlindExpansion: vi.fn() },
       source: { sourceId: 'cc98', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' },
         ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 }, search },
       sleep: async () => undefined,
@@ -601,7 +605,7 @@ describe('issue #22 pagination and early stop', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => ({ ...timePlan, timeConstraint: { expression: '2025 年', startDate: '2025-01-01', endDate: '2025-12-31' } }),
-        planFeedback: vi.fn(), planBlindExpansion: vi.fn(),
+        planFeedback: vi.fn(async () => continueFeedback()), planBlindExpansion: vi.fn(),
       },
       source: { sourceId: 'cc98', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' },
         ratePolicy: { maxSearchCalls: 100, minRequestIntervalMs: 0 }, search },
@@ -626,7 +630,7 @@ describe('issue #22 pagination and early stop', () => {
       .mockResolvedValueOnce(page([...Array.from({ length: 19 }, () => '2020-01-01' as string | undefined), undefined]))
       .mockResolvedValue({ hits: [], nextCursor: undefined });
     const session = new SearchSession({
-      planner: { planFirstRound: async () => timePlan, planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }), planBlindExpansion: vi.fn() },
+      planner: { planFirstRound: async () => timePlan, planFeedback: async () => continueFeedback(), planBlindExpansion: vi.fn() },
       source: { sourceId: 'cc98', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' },
         ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 }, search },
       sleep: async () => undefined,
@@ -639,7 +643,7 @@ describe('issue #22 pagination and early stop', () => {
       .mockResolvedValueOnce(page(Array.from({ length: 20 }, () => '2020-01-01')))
       .mockResolvedValue({ hits: [], nextCursor: undefined });
     const duoSession = new SearchSession({
-      planner: { planFirstRound: async () => timePlan, planFeedback: async () => ({ newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }), planBlindExpansion: vi.fn() },
+      planner: { planFirstRound: async () => timePlan, planFeedback: async () => continueFeedback(), planBlindExpansion: vi.fn() },
       source: { sourceId: 'duo', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' },
         ratePolicy: { maxSearchCalls: 30, minRequestIntervalMs: 0 }, search: duoSearch },
       sleep: async () => undefined,

@@ -2,8 +2,9 @@ import type { FeedbackInput } from './planner';
 import { hasExplicitTimeConstraint } from './planner';
 import { folded, normalizeText } from './text';
 import { rankAndFilterCandidates, type RankedCandidateView } from './ranking';
-import { firstObservedRound, mergeHits } from './retrieval';
+import { mergeHits } from './retrieval';
 import { createFeedbackInput } from './feedback-payload';
+import { applyFeedbackJudgments, selectFeedbackEvidence } from './feedback-evidence';
 import { runFinalScreening } from './screening';
 import { PaginationCursorGuard, pagePredatesStart } from './pagination';
 import {
@@ -40,6 +41,7 @@ export interface SearchSnapshot {
   inactiveSearches: string[];
   learnedTerms: string[];
   results: TopicCandidate[];
+  softIsolatedResults: TopicCandidate[];
   outOfRangeCount: number;
   planningNotice: string;
   stopReason: SearchStopReason | null;
@@ -96,7 +98,7 @@ export class SearchSession {
   private requestedStop: SearchStopReason | null = null;
   private snapshot: SearchSnapshot = {
     query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
-    activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
+    activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [], softIsolatedResults: [],
     outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '', screening: 'idle',
   };
 
@@ -116,7 +118,7 @@ export class SearchSession {
 
   private publish(patch: Partial<SearchSnapshot> = {}): void {
     this.snapshot = { ...this.snapshot, ...patch };
-    this.onUpdate?.({ ...this.snapshot, results: [...this.snapshot.results] });
+    this.onUpdate?.({ ...this.snapshot, results: [...this.snapshot.results], softIsolatedResults: [...this.snapshot.softIsolatedResults] });
   }
 
   private finishSync(reason: SearchStopReason, statusText = stopReasonText(reason)): SearchSnapshot {
@@ -183,7 +185,7 @@ export class SearchSession {
     }
   }
 
-  async run(query: string, requestLimit: number): Promise<SearchSnapshot> {
+  async run(query: string, requestLimit: number, evidenceLimit = 30): Promise<SearchSnapshot> {
     const normalizedQuery = normalizeText(query);
     const enforceTimeRange = hasExplicitTimeConstraint(normalizedQuery);
     const timeOrderedSource = this.source.capabilities.resultOrdering === 'time-desc';
@@ -192,9 +194,15 @@ export class SearchSession {
     const inactive = new Set<string>();
     const learned = new Set<string>();
     let round = 1;
-    let searches: PlannedSearch[];
+    let temporaryKeySequence = 0;
+    let firstWave = true;
+    let blindExpanded = false;
+    let pendingFirstPages: PlannedSearch[] = [];
+    const continuations = new Map<string, { search: PlannedSearch; cursor: string }>();
+    const knownSearches = new Set<string>();
     const { maxSearchCalls, minRequestIntervalMs } = this.source.ratePolicy;
     const maxRequests = Math.min(maxSearchCalls, Math.max(1, Math.round(Number.isFinite(requestLimit) ? requestLimit : 1)));
+    const maxEvidence = Math.min(100, Math.max(10, Math.round(Number.isFinite(evidenceLimit) ? evidenceLimit : 30)));
     const cursorGuard = new PaginationCursorGuard();
     let runContext = (): { view: RankedCandidateView; entries: RetrievedCandidate[]; query: string } => ({
       view: { results: [], outOfRangeCount: 0 }, entries: [...candidates.values()], query: normalizedQuery,
@@ -207,99 +215,159 @@ export class SearchSession {
         plan,
         planningNotice: plan.usedOriginalQueryFallback ? '模型计划无效，已直接搜索原词。' : '',
       });
-      searches = plan.searches;
+      const enqueueFirstPages = (searches: PlannedSearch[]) => {
+        for (const search of searches) {
+          const key = folded(search.query);
+          if (!key || knownSearches.has(key)) continue;
+          knownSearches.add(key);
+          pendingFirstPages.push(search);
+        }
+      };
+      enqueueFirstPages(plan.searches);
       const startDate = plan.timeConstraint.startDate;
 
-      const candidateView = () => rankAndFilterCandidates([...candidates.values()], plan, enforceTimeRange);
-      runContext = () => ({ view: candidateView(), entries: [...candidates.values()], query: normalizedQuery });
+      const candidateView = () => {
+        const ranked = rankAndFilterCandidates([...candidates.values()], plan, enforceTimeRange);
+        const softIds = new Set([...candidates.values()]
+          .filter((entry) => entry.relevanceGrade === 0)
+          .map((entry) => entry.candidate.id));
+        return {
+          results: ranked.results.filter((candidate) => !softIds.has(candidate.id)),
+          softIsolatedResults: ranked.results.filter((candidate) => softIds.has(candidate.id)),
+          outOfRangeCount: ranked.outOfRangeCount,
+          rankedIds: ranked.results.map((candidate) => candidate.id),
+        };
+      };
+      const publishCandidateView = () => {
+        const view = candidateView();
+        this.publish({
+          results: view.results,
+          softIsolatedResults: view.softIsolatedResults,
+          outOfRangeCount: view.outOfRangeCount,
+        });
+      };
+      runContext = () => {
+        const view = candidateView();
+        return { view: { results: view.results, outOfRangeCount: view.outOfRangeCount }, entries: [...candidates.values()], query: normalizedQuery };
+      };
 
       while (true) {
         if (this.requestedStop) return this.finish(this.requestedStop, runContext());
         if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
-        const deduped = searches.filter((search, index, all) => {
-          const key = folded(search.query);
-          return key && !executed.has(key) && all.findIndex((item) => folded(item.query) === key) === index;
-        });
-        if (!deduped.length) return this.finish('no_new_searches', runContext());
+        const waveFirstPages = pendingFirstPages;
+        pendingFirstPages = [];
+        const waveKeys = new Set(waveFirstPages.map((search) => folded(search.query)));
+        const queue: Array<{ search: PlannedSearch; cursor?: string }> = waveFirstPages.map((search) => ({ search }));
+        for (const [key, continuation] of continuations) {
+          if (!waveKeys.has(key)) queue.push(continuation);
+        }
+        if (!queue.length) return this.finish('no_new_searches', runContext());
 
-        const before = candidateView().results.length;
-        const roundHits = new Map(deduped.map((search) => [folded(search.query), 0]));
-        const queue = deduped.map((search) => ({ search, cursor: undefined as string | undefined }));
+        const beforeEvidence = new Map([...candidates].map(([id, entry]) => [id, entry.evidenceRevision ?? 0]));
         this.publish({
           phase: 'searching', round,
-          activeSearches: deduped.map((search) => search.query),
-          statusText: `正在执行第 ${round} 轮检索…`,
+          activeSearches: queue.map(({ search }) => search.query),
+          statusText: `正在执行第 ${round} 个检索波次…`,
         });
 
         while (queue.length) {
           if (this.requestedStop) return this.finish(this.requestedStop, runContext());
           if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
           const current = queue.shift()!;
+          const searchKey = folded(current.search.query);
+          continuations.delete(searchKey);
           if (this.snapshot.requestsMade > 0) {
             await this.sleep(minRequestIntervalMs);
             if (this.requestedStop) return this.finish(this.requestedStop, runContext());
           }
           this.publish({ requestsMade: this.snapshot.requestsMade + 1 });
           const page = await this.source.search(current.search.query, current.cursor, this.controller.signal);
-          roundHits.set(folded(current.search.query), (roundHits.get(folded(current.search.query)) ?? 0) + page.hits.length);
-          mergeHits(candidates, page.hits, current.search.query, round);
-          this.publish(candidateView());
+          const previous = executed.get(searchKey);
+          executed.set(searchKey, { query: current.search.query, hitCount: (previous?.hitCount ?? 0) + page.hits.length });
+          if ((executed.get(searchKey)?.hitCount ?? 0) === 0) inactive.add(current.search.query);
+          else inactive.delete(current.search.query);
+          mergeHits(candidates, page.hits, current.search.query, round, () => `c${temporaryKeySequence++}`);
+          publishCandidateView();
           // Per-search early stop: a fully-dated page already older than the
           // start date means later pages only get older on a time-desc source.
           const exhausted = timeOrderedSource && pagePredatesStart(page, startDate);
-          if (!exhausted && cursorGuard.accepts(folded(current.search.query), current.cursor, page.nextCursor)) {
-            queue.push({ search: current.search, cursor: page.nextCursor });
+          if (!exhausted && cursorGuard.accepts(searchKey, current.cursor, page.nextCursor)) {
+            continuations.set(searchKey, { search: current.search, cursor: page.nextCursor! });
           }
         }
 
-        for (const search of deduped) {
-          const hitCount = roundHits.get(folded(search.query)) ?? 0;
-          executed.set(folded(search.query), { query: search.query, hitCount });
-          if (hitCount === 0) inactive.add(search.query);
-        }
         const view = candidateView();
-        const visibleIds = new Set(view.results.map((candidate) => candidate.id));
-        const newCandidates = [...candidates.values()].filter(
-          (candidate) => firstObservedRound(candidate) === round && visibleIds.has(candidate.candidate.id),
-        );
         this.publish({
-          ...view,
+          results: view.results,
+          softIsolatedResults: view.softIsolatedResults,
+          outOfRangeCount: view.outOfRangeCount,
           activeSearches: [],
           executedSearches: [...executed.values()].map((search) => search.query),
           inactiveSearches: [...inactive],
-          statusText: `第 ${round} 轮完成，新增 ${view.results.length - before} 个候选。`,
+          statusText: `第 ${round} 个检索波次完成。`,
         });
 
-        if (round === 1 && view.results.length === 0) {
+        if (this.snapshot.requestsMade >= maxRequests) {
+          return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
+        }
+
+        if (firstWave && view.results.length === 0 && !blindExpanded) {
           this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });
           const blind = await this.planner.planBlindExpansion(normalizedQuery, this.controller.signal);
-          searches = blind.searches;
+          blindExpanded = true;
+          enqueueFirstPages(blind.searches);
+          firstWave = false;
           round += 1;
           continue;
         }
+        firstWave = false;
         if (view.results.length === 0) return this.finish('no_results', runContext());
-        if (newCandidates.length === 0) return this.finish('no_new_candidates', runContext());
 
-        this.publish({ phase: 'feedback', statusText: `正在根据第 ${round} 轮新增候选学习检索词…` });
+        const evidenceChanged = [...candidates.values()].some((entry) => (entry.evidenceRevision ?? 0) > (beforeEvidence.get(entry.candidate.id) ?? 0));
+        const selected = evidenceChanged
+          ? selectFeedbackEvidence([...candidates.values()], view.rankedIds, maxEvidence)
+          : { entries: [], candidates: [] };
+        if (!selected.candidates.length) {
+          if (!pendingFirstPages.length && !continuations.size) return this.finish('no_new_candidates', runContext());
+          round += 1;
+          continue;
+        }
+
+        this.publish({ phase: 'feedback', statusText: `正在判断第 ${round} 个检索波次的候选证据…` });
         const feedback = await this.planner.planFeedback(createFeedbackInput({
           query: normalizedQuery,
           executedSearches: [...executed.values()],
-          newCandidates: newCandidates.map((entry) => entry.candidate),
-          round,
+          candidates: selected.candidates,
         }), this.controller.signal);
-        feedback.learnedTerms.forEach((term) => learned.add(term));
+        applyFeedbackJudgments(selected.entries, feedback.judgments ?? []);
+        const mayExpand = feedback.judgments === undefined
+          || (feedback.judgments ?? []).some((judgment) => judgment.grade === 2 || judgment.grade === 3);
+        if (mayExpand) feedback.learnedTerms.forEach((term) => learned.add(term));
         feedback.stopSuggestions.forEach((suggestion) => {
           const match = executed.get(folded(suggestion));
           if (match?.hitCount === 0) inactive.add(match.query);
         });
-        this.publish({ learnedTerms: [...learned], inactiveSearches: [...inactive] });
+        const judgedView = candidateView();
+        this.publish({
+          results: judgedView.results,
+          softIsolatedResults: judgedView.softIsolatedResults,
+          outOfRangeCount: judgedView.outOfRangeCount,
+          learnedTerms: [...learned], inactiveSearches: [...inactive],
+        });
         if (feedback.shouldStop) return this.finish('model_stop', runContext());
-        searches = feedback.newSearches;
+        if (mayExpand) enqueueFirstPages(feedback.newSearches);
         round += 1;
       }
     } catch (error) {
       if (this.requestedStop) return this.finish(this.requestedStop, runContext());
-      if (error instanceof SearchSessionError) return this.finish(error.reason, runContext(), error.message);
+      if (this.snapshot.phase === 'feedback') {
+        const reason = error instanceof SearchSessionError ? error.reason : 'failed';
+        const message = error instanceof Error ? error.message : stopReasonText(reason);
+        return this.finishSync(reason, message);
+      }
+      if (error instanceof SearchSessionError) {
+        return this.finish(error.reason, runContext(), error.message);
+      }
       if (error instanceof SourceError) {
         const reason: SearchStopReason = error.code === 'rate_limited' ? 'rate_limited'
           : error.code === 'not_logged_in' ? 'not_logged_in'

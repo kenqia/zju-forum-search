@@ -85,6 +85,8 @@ summary { color: var(--green); cursor: pointer; font-weight: 800; }
 .chip { padding: 3px 7px; border-radius: 999px; color: #5c615d; background: var(--soft); font-size: 10px; }
 .chip.inactive { text-decoration: line-through; opacity: .68; }
 .result { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; align-items: start; padding: 11px 0; border-top: 1px solid #ebe8dc; }
+.soft-isolated { margin-top: 16px; }
+.soft-isolated .result { grid-template-columns: minmax(0, 1fr); }
 .rank { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; color: var(--green); background: var(--lime); font: 800 11px/1 Georgia, serif; }
 .result h2 { margin: 0 0 4px; font: 700 13px/1.4 "Noto Serif SC", "Songti SC", serif; }
 .result a { color: var(--green); text-decoration: none; }

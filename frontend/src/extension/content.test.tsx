@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createBackgroundPlanner, mountExtension, SearchStatus, Terms, type RuntimeMessenger } from './content';
+import { createBackgroundPlanner, mountExtension, ResultLists, SearchStatus, Terms, type RuntimeMessenger } from './content';
 import type { SearchSnapshot } from './search-session';
 import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } from './types';
 
@@ -23,7 +23,7 @@ describe('extension content UI', () => {
     const planner = createBackgroundPlanner(runtime, capabilities);
     await expect(planner.planFirstRound('测试')).rejects.toThrow('test response');
     await expect(planner.planBlindExpansion('测试')).rejects.toThrow('test response');
-    await expect(planner.planFeedback({ query: '测试', round: 1, executedSearches: [], newCandidates: [] })).rejects.toThrow('test response');
+    await expect(planner.planFeedback({ query: '测试', executedSearches: [], candidates: [] })).rejects.toThrow('test response');
     expect(requests.map((request) => request.type)).toEqual(['planner:first', 'planner:blind', 'planner:feedback']);
     for (const request of requests) expect(request).toMatchObject({ capabilities });
   });
@@ -39,6 +39,7 @@ describe('extension content UI', () => {
       },
       activeSearches: [], executedSearches: ['计算机网络', '计网'], inactiveSearches: ['计网'],
       learnedTerms: ['网络原理'], results: [], outOfRangeCount: 0,
+      softIsolatedResults: [],
       planningNotice: '模型计划无效，已直接搜索原词。', stopReason: 'model_stop', statusText: '完成', screening: 'idle',
     };
 
@@ -64,7 +65,7 @@ describe('extension content UI', () => {
     };
 
     await expect(createBackgroundPlanner(runtime, { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' }).planFeedback({
-      query: '高数', executedSearches: [], newCandidates: [], round: 1,
+      query: '高数', executedSearches: [], candidates: [],
     })).rejects.toMatchObject({
       reason: 'model_timeout',
       message: '反馈模型调用超过 20 秒，已保留当前结果。',
@@ -77,6 +78,7 @@ describe('extension content UI', () => {
     const base: SearchSnapshot = {
       query: '资料', phase: 'screening', round: 1, requestsMade: 1, plan: null,
       activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
+      softIsolatedResults: [],
       outOfRangeCount: 0, planningNotice: '', stopReason: null,
       statusText: '已完成 2/7 批候选筛选。全部成功后统一应用结果…', screening: 'running',
     };
@@ -90,6 +92,20 @@ describe('extension content UI', () => {
 
     await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', screening: 'failed', statusText: '意图筛选未完成。' }} running={false} onStop={vi.fn()} />));
     expect(container.querySelector('.status.error')?.textContent).toContain('意图筛选未完成');
+    await act(async () => root.unmount());
+  });
+
+  it('renders grade 0 candidates in a collapsed section with ordinary original-post links', async () => {
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const topic = { id: 'hidden', title: '可能误判的资料', board: '学习天地', time: '2026-09-20', author: '', replyCount: 2, url: 'https://www.cc98.org/topic/hidden', firstRound: 1 };
+    await act(async () => root.render(<ResultLists results={[]} softIsolatedResults={[topic]} emptyText="暂无" />));
+
+    const details = container.querySelector('details');
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector('summary')?.textContent).toContain('已隐藏的明确无关结果（1）');
+    expect(details?.querySelector('a')?.getAttribute('href')).toBe(topic.url);
+    expect(details?.textContent).not.toContain('grade');
     await act(async () => root.unmount());
   });
 

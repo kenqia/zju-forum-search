@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DUO_RATE_POLICY, duoAdapter, readDuoToken, DuoSourceSession } from './index';
 import { receiveEnvelope, testPublicKey } from './test-server';
 import { createFeedbackInput } from '../../feedback-payload';
+import { modelMetadata } from '../../model-metadata';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -59,8 +60,11 @@ describe('Duo source session', () => {
       document: { title: entry.content.slice(0, 120), snippet: entry.content, author: '合成作者',
         publishedAt: '2026-09-18 12:00:00', section: '合成板块', replyCount: 3 }, position: 1,
     }] });
-    const feedback = createFeedbackInput({ query: '测试', executedSearches: [], round: 1, newCandidates: page.hits.map((hit) => hit.candidate) });
-    expect(feedback.newCandidates).toEqual([{ title: '', author: '合成作者', publishedAt: '2026-09-18 12:00:00', section: '合成板块', replyCount: 3 }]);
+    const feedback = createFeedbackInput({
+      query: '测试', executedSearches: [],
+      candidates: page.hits.map((hit, index) => ({ key: `c${index}`, matchedQueries: ['测试'], ...modelMetadata(hit.candidate) })),
+    });
+    expect(feedback.candidates).toEqual([{ key: 'c0', matchedQueries: ['测试'], title: '', author: '合成作者', publishedAt: '2026-09-18 12:00:00', section: '合成板块', replyCount: 3 }]);
     expect(JSON.stringify(feedback)).not.toContain('仅供本地的正文');
   });
 

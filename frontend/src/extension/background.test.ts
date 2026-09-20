@@ -49,6 +49,7 @@ describe('background message boundary', () => {
       llmApiKey: 'fake-key',
       llmModel: 'model-name',
       searchRequestLimit: 45,
+      feedbackEvidenceLimit: 30,
       intentFilterEnabled: true,
       searchBudgetSeconds: 45,
     };
@@ -125,7 +126,7 @@ describe('background message boundary', () => {
     await send({
       type: 'planner:feedback', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' },
       requestId: 'feedback-1',
-      input: { query: '高数', executedSearches: [], newCandidates: [], round: 1 },
+      input: { query: '高数', executedSearches: [], candidates: [] },
     });
 
     const [, init] = (dependencies.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
