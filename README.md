@@ -23,6 +23,14 @@ bash frontend/scripts/issue-26-acceptance-wizard.sh
 
 向导先运行完整前端检查，再逐步提示 Edge 中需要人工确认的结果分区、增量顺序和卡片内容。它不读取或保存 API key、Cookie、登录态、请求内容或模型响应。
 
+验收 Issue #27 的最终列表重排时运行：
+
+```bash
+bash frontend/scripts/issue-27-acceptance-wizard.sh
+```
+
+向导先验证 Top-M、白名单、删除保护、失败回退和旧协议清理，再引导检查设置控件、反馈轮独立运行、单次最终列表重排状态和取消回退。它不读取浏览器存储或模型请求，也不会保存认证数据。
+
 ## 模型设置
 
 打开悬浮球，在“模型设置”中填写：
