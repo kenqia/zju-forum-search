@@ -66,7 +66,6 @@ describe('Issue #30 查询组合', () => {
           ],
         }),
         planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
-        planBlindExpansion: async () => basePlan,
       },
       source: {
         sourceId: 'cc98', capabilities: titleCapabilities,
@@ -89,7 +88,6 @@ describe('Issue #30 查询组合', () => {
       planner: {
         planFirstRound: async () => ({ ...basePlan, searches: [{ query: '只有平衡词', purpose: '', role: 'balanced' }] }),
         planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
-        planBlindExpansion: async () => basePlan,
       },
       source: {
         sourceId: 'cc98', capabilities: titleCapabilities,
@@ -172,7 +170,6 @@ describe('Issue #30 可验证扩展', () => {
       planner: {
         planFirstRound: async () => ({ ...basePlan, searches: [{ query: '原词', purpose: '', role: 'balanced' }] }),
         planFeedback,
-        planBlindExpansion: async () => basePlan,
       },
       source: {
         sourceId: 'cc98', capabilities: titleCapabilities,

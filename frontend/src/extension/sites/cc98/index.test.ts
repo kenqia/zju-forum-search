@@ -68,6 +68,24 @@ describe('CC98 source session contract', () => {
     await expect(session.search('测试', undefined)).resolves.toMatchObject({ hits: { length: 25 }, nextCursor: '25' });
     await expect(session.search('测试', 'not-an-offset')).rejects.toMatchObject({ code: 'invalid_response' });
   });
+
+  it('continues every non-empty raw page, including a short page, and stops on an empty page', async () => {
+    const payloads = [[{ id: 'first' }], []];
+    const fetch = vi.fn(async (_input: string) => new Response(JSON.stringify(payloads.shift()), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    const session = new Cc98SourceSession('Bearer synthetic', fetch);
+
+    const first = await session.search('测试', undefined);
+    const second = await session.search('测试', first.nextCursor);
+
+    expect(first.nextCursor).toBe('1');
+    expect(second.nextCursor).toBeUndefined();
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+      'https://api.cc98.org/topic/search?keyword=%E6%B5%8B%E8%AF%95&from=0&size=20',
+      'https://api.cc98.org/topic/search?keyword=%E6%B5%8B%E8%AF%95&from=1&size=20',
+    ]);
+  });
 });
 
 

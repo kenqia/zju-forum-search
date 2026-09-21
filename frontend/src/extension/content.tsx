@@ -50,10 +50,10 @@ class BackgroundPlanner implements SearchPlanner {
       );
     });
   }
-  private async requestPlan(type: 'planner:first' | 'planner:blind', query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
+  private async requestPlan(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const request = { type, requestId, query, capabilities: this.capabilities };
+    const request = { type: 'planner:first' as const, requestId, query, capabilities: this.capabilities };
     const response = await this.withCancellation(this.runtime.send(request), requestId, signal);
     if (!response.ok) throw responseError(response, '模型调用超过 20 秒，未开始检索。');
     return response.plan;
@@ -73,10 +73,7 @@ class BackgroundPlanner implements SearchPlanner {
     return response.rerank;
   }
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
-    return this.requestPlan('planner:first', query, signal);
-  }
-  planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
-    return this.requestPlan('planner:blind', query, signal);
+    return this.requestPlan(query, signal);
   }
   planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
     return this.requestFeedback(input, signal);

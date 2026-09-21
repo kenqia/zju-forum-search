@@ -51,7 +51,6 @@ export interface SearchSnapshot {
 export interface SearchPlanner {
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan>;
   planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan>;
-  planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan>;
   rerankResults?(input: import('./types').FinalRerankRequestInput, signal?: AbortSignal): Promise<import('./types').FinalRerankPlan>;
 }
 
@@ -72,7 +71,7 @@ export class SearchSessionError extends Error {
 
 export function stopReasonText(reason: SearchStopReason): string {
   const messages: Record<SearchStopReason, string> = {
-    model_stop: '模型判断已有足够结果，搜索已停止。',
+    model_stop: '模型已关闭后续扩展，并已完成已知分页。',
     no_new_candidates: '本轮没有新增候选，搜索已停止。',
     no_new_searches: '没有新的可执行检索词，搜索已停止。',
     no_results: '没有找到主题帖。',
@@ -230,8 +229,10 @@ export class SearchSession {
     const inactive = new Set<string>();
     let round = 1;
     let temporaryKeySequence = 0;
-    let firstWave = true;
-    let blindExpanded = false;
+    let rescueUsed = false;
+    let expansionClosed = false;
+    let failedRescueSignature: string | null = null;
+    let reservationActive = false;
     let pendingFirstPages: PlannedSearch[] = [];
     const continuations = new Map<string, { search: PlannedSearch; cursor: string }>();
     const knownSearches = new Set<string>();
@@ -262,13 +263,16 @@ export class SearchSession {
             : '',
         ].filter(Boolean).join(' '),
       });
-      const enqueueFirstPages = (searches: PlannedSearch[]) => {
+      const enqueueFirstPages = (searches: PlannedSearch[], prioritize = false): number => {
+        const accepted: PlannedSearch[] = [];
         for (const search of searches) {
           const key = folded(search.query);
           if (!key || knownSearches.has(key)) continue;
           knownSearches.add(key);
-          pendingFirstPages.push(search);
+          accepted.push(search);
         }
+        pendingFirstPages = prioritize ? [...accepted, ...pendingFirstPages] : [...pendingFirstPages, ...accepted];
+        return accepted.length;
       };
       const prioritizedSearches = (() => {
         if (this.source.capabilities.searchSurface !== 'title' || maxRequests < 2) return plan.searches;
@@ -282,6 +286,11 @@ export class SearchSession {
         ];
       })();
       enqueueFirstPages(prioritizedSearches);
+      reservationActive = this.source.capabilities.searchSurface === 'title'
+        && maxRequests >= 3
+        && prioritizedSearches.length >= maxRequests
+        && prioritizedSearches.some((search) => search.role === 'anchor')
+        && prioritizedSearches.some((search) => search.role !== 'anchor');
       const startDate = plan.timeConstraint.startDate;
 
       const candidateView = () => {
@@ -308,10 +317,24 @@ export class SearchSession {
         const view = candidateView();
         return { view: { results: view.results, outOfRangeCount: view.outOfRangeCount }, entries: [...candidates.values()], query: normalizedQuery };
       };
+      const feedbackSignal = (view: ReturnType<typeof candidateView>): 'none' | 'weak' | 'positive' => {
+        const inRangeIds = new Set(view.rankedIds);
+        const inRange = [...candidates.values()].filter((entry) => inRangeIds.has(entry.candidate.id));
+        if (!inRange.length) return 'none';
+        return inRange.some((entry) => entry.relevanceGrade === 2 || entry.relevanceGrade === 3) ? 'positive' : 'weak';
+      };
+      const rescueSignature = (view: ReturnType<typeof candidateView>): string => {
+        const inRangeIds = new Set(view.rankedIds);
+        return [...candidates.values()]
+          .filter((entry) => inRangeIds.has(entry.candidate.id))
+          .map((entry) => `${entry.temporaryKey}:${entry.evidenceRevision ?? 0}:${entry.relevanceGrade ?? 'u'}`)
+          .sort()
+          .join('|') || 'none';
+      };
+      const requestLimitStatus = () => `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`;
 
       while (true) {
         if (this.requestedStop) return this.finish(this.requestedStop, runContext());
-        if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
         const waveFirstPages = pendingFirstPages;
         pendingFirstPages = [];
         const waveKeys = new Set(waveFirstPages.map((search) => folded(search.query)));
@@ -319,7 +342,12 @@ export class SearchSession {
         for (const [key, continuation] of continuations) {
           if (!waveKeys.has(key)) queue.push(continuation);
         }
-        if (!queue.length) return this.finish('no_new_searches', runContext());
+        if (!queue.length) {
+          if (expansionClosed) return this.finish('model_stop', runContext());
+          const finalView = candidateView();
+          return this.finish(feedbackSignal(finalView) === 'none' ? 'no_results' : 'no_new_candidates', runContext());
+        }
+        if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', runContext(), requestLimitStatus());
 
         const beforeEvidence = new Map([...candidates].map(([id, entry]) => [id, entry.evidenceRevision ?? 0]));
         this.publish({
@@ -330,7 +358,15 @@ export class SearchSession {
 
         while (queue.length) {
           if (this.requestedStop) return this.finish(this.requestedStop, runContext());
-          if (this.snapshot.requestsMade >= maxRequests) return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
+          const schedulingLimit = reservationActive ? maxRequests - 1 : maxRequests;
+          if (this.snapshot.requestsMade >= schedulingLimit) {
+            if (!reservationActive) return this.finish('request_limit', runContext(), requestLimitStatus());
+            pendingFirstPages = [
+              ...queue.filter((item) => item.cursor === undefined).map((item) => item.search),
+              ...pendingFirstPages,
+            ];
+            break;
+          }
           const current = queue.shift()!;
           const searchKey = folded(current.search.query);
           continuations.delete(searchKey);
@@ -376,40 +412,26 @@ export class SearchSession {
           statusText: `第 ${round} 个检索波次完成。`,
         });
 
-        if (firstWave && view.results.length === 0 && !blindExpanded) {
-          if (this.snapshot.requestsMade >= maxRequests) {
-            return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
-          }
-          this.publish({ phase: 'feedback', statusText: '首轮没有候选，正在进行一次盲扩展…' });
-          const blind = await waitForAbortable(
-            this.planner.planBlindExpansion(normalizedQuery, this.controller.signal),
-            this.controller.signal,
-            '搜索运行已终止',
-          );
-          if (this.requestedStop) return this.finish(this.requestedStop, runContext());
-          blindExpanded = true;
-          enqueueFirstPages(blind.searches);
-          firstWave = false;
-          round += 1;
-          continue;
-        }
-        firstWave = false;
-        if (view.results.length === 0 && view.softIsolatedResults.length === 0) return this.finish('no_results', runContext());
-
         const evidenceChanged = [...candidates.values()].some((entry) => (entry.evidenceRevision ?? 0) > (beforeEvidence.get(entry.candidate.id) ?? 0));
         const selected = evidenceChanged
           ? selectFeedbackEvidence([...candidates.values()], view.rankedIds, maxEvidence)
           : { entries: [], candidates: [] };
-        if (!selected.candidates.length) {
-          if (this.snapshot.requestsMade >= maxRequests) {
-            return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
-          }
-          if (!pendingFirstPages.length && !continuations.size) return this.finish('no_new_candidates', runContext());
+        const signalBeforeFeedback = feedbackSignal(view);
+        const signatureBeforeFeedback = rescueSignature(view);
+        const rescueCanBeAttempted = !expansionClosed && !rescueUsed && signalBeforeFeedback !== 'positive'
+          && signatureBeforeFeedback !== failedRescueSignature;
+        if (!selected.candidates.length && !rescueCanBeAttempted) {
+          if (reservationActive) reservationActive = false;
           round += 1;
           continue;
         }
 
-        this.publish({ phase: 'feedback', statusText: `正在判断第 ${round} 个检索波次的候选证据…` });
+        this.publish({
+          phase: 'feedback',
+          statusText: selected.candidates.length
+            ? `正在判断第 ${round} 个检索波次的候选证据…`
+            : '当前没有正信号，正在请求一次查询救援…',
+        });
         const feedback = await waitForAbortable(this.planner.planFeedback(createFeedbackInput({
           query: normalizedQuery,
           executedSearches: [...executed.values()],
@@ -428,23 +450,42 @@ export class SearchSession {
           outOfRangeCount: judgedView.outOfRangeCount,
           inactiveSearches: [...inactive],
         });
-        if (this.snapshot.requestsMade >= maxRequests) {
-          return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
-        }
-        if (feedback.shouldStop) return this.finish('model_stop', runContext());
+        const signalAfterFeedback = feedbackSignal(judgedView);
+        const signatureAfterFeedback = rescueSignature(judgedView);
         const positiveJudgmentKeys = new Set(feedback.judgments
           .filter((judgment) => judgment.grade === 2 || judgment.grade === 3)
           .map((judgment) => judgment.key));
         const nativeTitleKeys = new Set(selected.entries
           .filter((entry) => entry.candidate.titleOrigin === 'native' && entry.candidate.title.trim())
           .map((entry) => entry.temporaryKey));
-        enqueueFirstPages(feedback.newSearches.filter((search) => {
-          const supportKeys = [...new Set(search.supportKeys ?? [])];
-          return search.basis === 'evidence'
-            && supportKeys.length >= 1
-            && supportKeys.length <= 3
-            && supportKeys.every((key) => positiveJudgmentKeys.has(key) && nativeTitleKeys.has(key));
-        }));
+        let justEnqueued = 0;
+        if (!expansionClosed) {
+          const evidenceSearches = feedback.newSearches.filter((search) => {
+            const supportKeys = [...new Set(search.supportKeys ?? [])];
+            return search.basis === 'evidence'
+              && supportKeys.length >= 1
+              && supportKeys.length <= 3
+              && supportKeys.every((key) => positiveJudgmentKeys.has(key) && nativeTitleKeys.has(key));
+          });
+          justEnqueued += enqueueFirstPages(evidenceSearches, true);
+          const mayRescue = !rescueUsed && signalAfterFeedback !== 'positive';
+          if (mayRescue) {
+            const rescueSearches = feedback.newSearches.filter((search) => search.basis === 'query'
+              && (search.supportKeys?.length ?? 0) === 0);
+            const acceptedRescues = enqueueFirstPages(rescueSearches, true);
+            justEnqueued += acceptedRescues;
+            if (acceptedRescues > 0) rescueUsed = true;
+            else failedRescueSignature = signatureAfterFeedback;
+          }
+        }
+        if (signalAfterFeedback === 'positive' || rescueUsed || failedRescueSignature === signatureAfterFeedback || expansionClosed) {
+          reservationActive = false;
+        }
+        const rescueStillEligible = !expansionClosed && !rescueUsed && signalAfterFeedback !== 'positive';
+        if (feedback.shouldStop && !rescueStillEligible && !pendingFirstPages.length && justEnqueued === 0) {
+          expansionClosed = true;
+          reservationActive = false;
+        }
         round += 1;
       }
     } catch (error) {

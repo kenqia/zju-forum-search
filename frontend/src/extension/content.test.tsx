@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } fr
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('extension content UI', () => {
-  it('forwards source capabilities for first, blind, and feedback requests', async () => {
+  it('forwards source capabilities for first-round and feedback requests', async () => {
     const capabilities = { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' } as const;
     const requests: ExtensionRequest[] = [];
     const runtime: RuntimeMessenger = {
@@ -22,9 +22,8 @@ describe('extension content UI', () => {
     };
     const planner = createBackgroundPlanner(runtime, capabilities);
     await expect(planner.planFirstRound('测试')).rejects.toThrow('test response');
-    await expect(planner.planBlindExpansion('测试')).rejects.toThrow('test response');
     await expect(planner.planFeedback({ query: '测试', executedSearches: [], candidates: [] })).rejects.toThrow('test response');
-    expect(requests.map((request) => request.type)).toEqual(['planner:first', 'planner:blind', 'planner:feedback']);
+    expect(requests.map((request) => request.type)).toEqual(['planner:first', 'planner:feedback']);
     for (const request of requests) expect(request).toMatchObject({ capabilities });
   });
 

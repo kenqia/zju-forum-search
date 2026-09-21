@@ -76,7 +76,7 @@ function isExtensionRequest(message: unknown): message is ExtensionRequest {
   if (value.type === 'settings:get') return true;
   if (value.type === 'settings:save') return Boolean(value.settings) && typeof value.settings === 'object';
   if (value.type === 'planner:cancel') return typeof value.requestId === 'string' && Boolean(value.requestId);
-  if (value.type === 'planner:first' || value.type === 'planner:blind') {
+  if (value.type === 'planner:first') {
     return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && typeof value.query === 'string';
   }
   if (value.type === 'planner:feedback') {
@@ -197,8 +197,6 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         const planner = new PlannerClient(transport, settings, request.capabilities);
         if (type === 'planner:first') {
           sendResponse({ ok: true, plan: await planner.planFirstRound(request.query, plannerController!.signal) });
-        } else if (type === 'planner:blind') {
-          sendResponse({ ok: true, plan: await planner.planBlindExpansion(request.query, plannerController!.signal) });
         } else if (type === 'planner:feedback') {
           sendResponse({ ok: true, feedback: await planner.planFeedback(request.input as FeedbackInput, plannerController!.signal) });
         } else {

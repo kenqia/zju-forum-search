@@ -39,7 +39,6 @@ describe('issue #25 retrieval waves', () => {
     };
     const planner = {
       planFirstRound: async () => ({ ...plan, searches: [{ query: '首词', purpose: '' }, { query: '次词', purpose: '' }] }),
-      planBlindExpansion: vi.fn(),
       planFeedback: vi.fn(async (input: FeedbackRequestInput) => {
         feedbackCalls.push(input);
         if (feedbackCalls.length === 1) {
@@ -72,7 +71,6 @@ describe('issue #25 retrieval waves', () => {
     };
     const planner = {
       planFirstRound: async () => plan,
-      planBlindExpansion: vi.fn(),
       planFeedback: vi.fn(async (input: FeedbackRequestInput) => {
         inputs.push(input);
         const shared = sharedKey
@@ -108,7 +106,6 @@ describe('issue #25 retrieval waves', () => {
   it('does not call feedback again when only the position changes for the same query', async () => {
     const planner = {
       planFirstRound: async () => plan,
-      planBlindExpansion: vi.fn(),
       planFeedback: vi.fn(async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: false, reasoning: '' })),
     };
     const source = {
@@ -128,7 +125,6 @@ describe('issue #25 retrieval waves', () => {
   it('rejudges and restores the only candidate when later metadata changes after grade 0', async () => {
     const planner = {
       planFirstRound: async () => plan,
-      planBlindExpansion: vi.fn(),
       planFeedback: vi.fn()
         .mockImplementationOnce(async (input: FeedbackRequestInput) => ({
           judgments: [{ key: input.candidates[0].key, grade: 0 as const }],
@@ -154,13 +150,13 @@ describe('issue #25 retrieval waves', () => {
     expect(result.softIsolatedResults).toEqual([]);
   });
 
-  it('completes feedback after a full wave even when that wave reaches the site request limit', async () => {
+  it('completes feedback after a full wave even when that wave uses the last allowed request', async () => {
     const planFeedback = vi.fn(async (input: FeedbackRequestInput) => ({
       judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
       newSearches: [], stopSuggestions: [], shouldStop: false, reasoning: '',
     }));
     const result = await new SearchSession({
-      planner: { planFirstRound: async () => plan, planBlindExpansion: vi.fn(), planFeedback },
+      planner: { planFirstRound: async () => plan, planFeedback },
       source: {
         sourceId: 'cc98', ratePolicy: { maxSearchCalls: 10, minRequestIntervalMs: 0 },
         capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } as const,
@@ -170,7 +166,7 @@ describe('issue #25 retrieval waves', () => {
     }).run('资料', 1, 30);
 
     expect(planFeedback).toHaveBeenCalledOnce();
-    expect(result.stopReason).toBe('request_limit');
+    expect(result.stopReason).toBe('no_new_candidates');
   });
 
   it('stops on feedback failure, keeps active results, and does not call the final model stage', async () => {
@@ -178,7 +174,6 @@ describe('issue #25 retrieval waves', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => plan,
-        planBlindExpansion: vi.fn(),
         planFeedback: async () => { throw new SearchSessionError('反馈模型调用超过 20 秒，已保留当前结果。', 'model_timeout'); },
         rerankResults,
       },

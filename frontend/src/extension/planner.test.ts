@@ -43,26 +43,21 @@ describe('PlannerClient', () => {
       return JSON.stringify({ searches: ['高数'], judgments: [], new_searches: [], stop_suggestions: [], should_stop: true, reasoning: '' });
     } }, DEFAULT_SETTINGS, { searchSurface, querySyntax, resultOrdering: 'time-desc' });
     await client.planFirstRound('高数');
-    await client.planBlindExpansion('高数');
     await client.planFeedback({ query: '高数', executedSearches: [], candidates: [] });
     for (const prompt of prompts) {
       expect(prompt).toContain({ title: '仅匹配原生标题', fulltext: '匹配全文', mixed: '匹配标题和正文' }[searchSurface]);
       expect(prompt).toContain(querySyntax === 'plain-keyword' ? '普通关键词' : '支持布尔查询语法');
       expect(prompt).not.toContain('论坛');
     }
-    expect(prompts[2]).toContain('标题为空');
-    expect(prompts[2]).toContain('不得推测正文');
+    expect(prompts[1]).toContain('标题为空');
+    expect(prompts[1]).toContain('不得推测正文');
   });
 
-  it('sends the current local date in first, blind, and feedback planning calls', async () => {
+  it('sends the current local date in first-round and feedback planning calls', async () => {
     const payloads: Record<string, unknown>[] = [];
     const responses = [
       JSON.stringify({
         summary: '近三年微积分资料', searches: [{ query: '微积分', purpose: '' }], required_concepts: [], excluded_terms: [],
-        time_constraint: { expression: '近三年', start_date: '2023-09-15', end_date: '2026-09-15' },
-      }),
-      JSON.stringify({
-        summary: '近三年微积分资料', searches: [{ query: '高数', purpose: '' }], required_concepts: [], excluded_terms: [],
         time_constraint: { expression: '近三年', start_date: '2023-09-15', end_date: '2026-09-15' },
       }),
       JSON.stringify({ judgments: [], new_searches: [], stop_suggestions: [], should_stop: true, reasoning: '足够' }),
@@ -75,12 +70,10 @@ describe('PlannerClient', () => {
     }, DEFAULT_SETTINGS, capabilities, () => '2026-09-15');
 
     await client.planFirstRound('近三年的微积分资料');
-    await client.planBlindExpansion('近三年的微积分资料');
     await client.planFeedback({ query: '近三年的微积分资料', executedSearches: [], candidates: [] });
 
     expect(payloads).toEqual([
       { query: '近三年的微积分资料', current_date: '2026-09-15' },
-      { query: '近三年的微积分资料', current_date: '2026-09-15', note: expect.any(String) },
       expect.objectContaining({ query: '近三年的微积分资料', current_date: '2026-09-15' }),
     ]);
   });

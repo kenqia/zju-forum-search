@@ -27,7 +27,7 @@ describe('Duo through the unchanged search core', () => {
     });
     const source = new DuoSourceSession('synthetic', { fetch, publicKey: testPublicKey });
     const result = await new SearchSession({ source, planner, sleep: async () => undefined }).run('课程资料', 60);
-    expect(result.stopReason).toBe('model_stop');
+    expect(result.stopReason).toBe('no_new_candidates');
     expect(result.results.map((item) => item.id)).toEqual(['2', '1']);
     expect(result.results[0].url).toBe('https://www.duoduo.link/a/2');
     expect(fetch).toHaveBeenCalledOnce();

@@ -331,10 +331,11 @@ ${sourceInstructions(capabilities)}
 
 规则：
 - 给每个能判断的候选返回 0、1、2 或 3：3 明确高度相关，2 大概率相关，1 信息不足、部分相关或不确定，0 明确无关。拿不准时用 1。
+- candidates 可以为空。没有候选或当前没有 grade 2/3 时，可以仅根据原始查询提出 query 依据的救援检索词，用同义语、上位词、缩短表达或概念拆分放宽召回。
 - 只追加新检索词或建议停用已执行且累计零命中的词；不得修改首轮确定的必须概念、排除词、时间约束。
 - 每条新检索词必须声明 basis。query 表示只根据原始查询放宽表达，support_keys 必须为空。evidence 表示从本轮候选的原生标题学习，必须提供 1 至 3 个去重 support_keys，且每个键都在本响应中获得 grade 2 或 grade 3。
 - evidence 检索词只能从支持候选的原生标题学习。板块可以帮助判断相关性，但不能作为新检索词的词汇来源。回复数不能单独提高 grade，也不能作为新检索词的词汇来源。
-- 若候选已饱和或继续搜索价值低，返回 should_stop: true。
+- should_stop 只建议关闭后续扩展，不会取消已入队首页或已知分页。若候选已饱和或不必再产生扩展词，返回 should_stop: true。
 - 不要重复已执行过的检索词。
 
 返回 JSON：
@@ -394,21 +395,6 @@ export class PlannerClient {
       new Set(input.candidates.map((candidate) => candidate.key)),
       new Set(input.candidates.filter((candidate) => candidate.title.trim()).map((candidate) => candidate.key)),
     );
-  }
-
-  async planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
-    const content = await this.transport.chatCompletions(this.settings, [
-      { role: 'system', content: firstRoundSystemPrompt(this.capabilities) },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          query: query.trim(),
-          current_date: this.today(),
-          note: '第一轮检索词全部没有命中。请放宽约束，换用更宽的同义表达、上位词和常见说法重新生成检索词。',
-        }),
-      },
-    ], signal);
-    return modelPlanFromContent(content, query, this.today);
   }
 
   async rerankResults(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {

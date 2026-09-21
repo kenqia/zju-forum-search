@@ -35,9 +35,14 @@ describe('background message boundary', () => {
   ])('rejects invalid capabilities before calling the model: %j', (capabilities) => {
     const dependencies: BackgroundDependencies = { storage: { get: vi.fn(), set: vi.fn() }, requestPermission: vi.fn(), fetch: vi.fn() };
     const handler = createMessageHandler(dependencies);
-    for (const type of ['planner:first', 'planner:blind', 'planner:feedback', 'planner:rerank']) {
+    for (const type of ['planner:first', 'planner:feedback', 'planner:rerank']) {
       expect(handler({ type, requestId: 'invalid', query: '测试', input: {}, capabilities }, vi.fn())).toBe(false);
     }
+    expect(handler({
+      type: 'planner:blind', requestId: 'removed', query: '测试', capabilities: {
+        searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc',
+      },
+    }, vi.fn())).toBe(false);
     expect(dependencies.fetch).not.toHaveBeenCalled();
     expect(dependencies.storage.get).not.toHaveBeenCalled();
   });

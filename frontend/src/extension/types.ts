@@ -210,7 +210,6 @@ export type ExtensionRequest =
   | { type: 'settings:get' }
   | { type: 'settings:save'; settings: Partial<ExtensionSettings> }
   | { type: 'planner:first'; requestId: string; query: string; capabilities: SourceCapabilities }
-  | { type: 'planner:blind'; requestId: string; query: string; capabilities: SourceCapabilities }
   | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput; capabilities: SourceCapabilities }
   | { type: 'planner:rerank'; requestId: string; input: FinalRerankRequestInput; capabilities: SourceCapabilities }
   | { type: 'planner:cancel'; requestId: string };
@@ -221,7 +220,7 @@ type ExtensionFailure = { ok: false; error: string; code?: ExtensionFailureCode 
 export type ExtensionResponseFor<Request extends ExtensionRequest> = ExtensionFailure | (
   Request extends { type: 'settings:get' | 'settings:save' }
     ? { ok: true; settings: PublicExtensionSettings }
-    : Request extends { type: 'planner:first' | 'planner:blind' }
+    : Request extends { type: 'planner:first' }
       ? { ok: true; plan: ModelQueryPlan }
       : Request extends { type: 'planner:feedback' }
         ? { ok: true; feedback: FeedbackPlan }

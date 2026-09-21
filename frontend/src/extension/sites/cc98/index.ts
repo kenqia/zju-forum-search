@@ -133,10 +133,11 @@ export class Cc98SourceSession implements SearchSourceSession {
     const hits = items
       .map((raw, index) => toSearchHit(raw, from + index + 1))
       .filter((hit): hit is SearchHit => hit !== null);
-    // Advance by the actual response length so tail results past a 20-item page are kept.
+    // Every non-empty raw page may have another page. Advance by the raw response
+    // length so malformed records cannot overlap or skip offsets.
     return {
       hits,
-      nextCursor: items.length >= PAGE_SIZE ? String(from + items.length) : undefined,
+      nextCursor: items.length > 0 ? String(from + items.length) : undefined,
     };
   }
 }
