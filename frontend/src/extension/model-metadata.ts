@@ -1,7 +1,6 @@
 import type { Candidate, FeedbackEvidence } from './types';
 
 export const MODEL_TITLE_LIMIT = 80;
-const MODEL_AUTHOR_LIMIT = 80;
 const MODEL_SECTION_LIMIT = 80;
 const MODEL_TIME_LIMIT = 40;
 
@@ -9,7 +8,6 @@ const MODEL_TIME_LIMIT = 40;
 export function modelMetadata(candidate: Candidate): FeedbackEvidence {
   return {
     title: candidate.titleOrigin === 'native' ? candidate.title.slice(0, MODEL_TITLE_LIMIT) : '',
-    ...(candidate.author !== undefined && { author: candidate.author.slice(0, MODEL_AUTHOR_LIMIT) }),
     ...(candidate.publishedAt !== undefined && { publishedAt: candidate.publishedAt.slice(0, MODEL_TIME_LIMIT) }),
     ...(candidate.section !== undefined && { section: candidate.section.slice(0, MODEL_SECTION_LIMIT) }),
     ...(candidate.replyCount !== undefined && Number.isFinite(candidate.replyCount) && { replyCount: candidate.replyCount }),
@@ -20,7 +18,6 @@ export function modelMetadata(candidate: Candidate): FeedbackEvidence {
 export function modelMetadataPayload(candidate: FeedbackEvidence) {
   return {
     title: candidate.title.slice(0, MODEL_TITLE_LIMIT),
-    author: (candidate.author ?? '').slice(0, MODEL_AUTHOR_LIMIT),
     board: (candidate.section ?? '').slice(0, MODEL_SECTION_LIMIT),
     time: (candidate.publishedAt ?? '').slice(0, MODEL_TIME_LIMIT),
     reply_count: candidate.replyCount ?? 0,

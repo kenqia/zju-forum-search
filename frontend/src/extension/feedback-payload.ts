@@ -18,7 +18,6 @@ function sanitizedCandidate(candidate: FeedbackCandidate): FeedbackCandidate {
   return {
     key: candidate.key.slice(0, 40),
     title: candidate.title.slice(0, 80),
-    ...(candidate.author !== undefined && { author: candidate.author.slice(0, 80) }),
     ...(candidate.publishedAt !== undefined && { publishedAt: candidate.publishedAt.slice(0, 40) }),
     ...(candidate.section !== undefined && { section: candidate.section.slice(0, 80) }),
     ...(candidate.replyCount !== undefined && Number.isFinite(candidate.replyCount) && { replyCount: candidate.replyCount }),

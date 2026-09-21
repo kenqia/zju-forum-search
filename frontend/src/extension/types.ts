@@ -1,6 +1,9 @@
+export type QueryRole = 'precise' | 'balanced' | 'anchor';
+
 export interface PlannedSearch {
   query: string;
   purpose: string;
+  role?: QueryRole;
 }
 
 export interface RequiredConcept {
@@ -110,7 +113,6 @@ export interface RetrievedCandidate {
 
 export interface FeedbackEvidence {
   title: string;
-  author?: string;
   publishedAt?: string;
   section?: string;
   replyCount?: number;
@@ -148,12 +150,18 @@ export interface SearchSourceAdapter {
   createSession(pageContext: PageContext): SearchSourceSession | Promise<SearchSourceSession>;
 }
 
-export type FeedbackSearch = PlannedSearch;
+export type FeedbackSearchBasis = 'query' | 'evidence';
+
+export interface FeedbackSearch {
+  query: string;
+  purpose: string;
+  basis?: FeedbackSearchBasis;
+  supportKeys?: string[];
+}
 
 export interface FeedbackPlan {
   judgments: FeedbackJudgment[];
   newSearches: FeedbackSearch[];
-  learnedTerms: string[];
   stopSuggestions: string[];
   shouldStop: boolean;
   reasoning: string;

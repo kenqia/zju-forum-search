@@ -92,7 +92,7 @@ export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities:
 
 const EMPTY_SNAPSHOT: SearchSnapshot = {
   query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
-  activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
+  activeSearches: [], executedSearches: [], inactiveSearches: [], results: [],
   softIsolatedResults: [],
   outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每个检索波次后更新。', finalRerank: 'idle',
 };
@@ -271,7 +271,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
 function ResultCard({ topic, rank }: { topic: import('./types').TopicCandidate; rank?: number }) {
   return <article className="result">
     {rank !== undefined && <span className="rank">{rank}</span>}
-    <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复</p></div>
+    <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.author || '作者未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复</p></div>
   </article>;
 }
 
@@ -319,7 +319,7 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
       {tab === 'search'
         ? <SearchPanel runtime={runtime} settings={settings} state={searchState} onState={(patch) => setSearchState((current) => ({ ...current, ...patch }))} controller={searchController.current} />
         : <SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} />}
-      <p className="privacy">反馈轮只会向模型发送原生标题、作者、时间、板块和回复数。正文派生标题仅在本地显示。正文、回帖和站点登录信息不会发送给模型。</p>
+      <p className="privacy">反馈轮只会向模型发送原生标题、时间、板块和回复数。作者只在本地结果卡片显示，不会发送给模型。正文派生标题仅在本地显示。正文、回帖和站点登录信息不会发送给模型。</p>
     </aside>
   </>;
 }

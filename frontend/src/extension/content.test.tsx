@@ -38,7 +38,7 @@ describe('extension content UI', () => {
         usedOriginalQueryFallback: true,
       },
       activeSearches: [], executedSearches: ['计算机网络', '计网'], inactiveSearches: ['计网'],
-      learnedTerms: ['网络原理'], results: [], outOfRangeCount: 0,
+      results: [], outOfRangeCount: 0,
       softIsolatedResults: [],
       planningNotice: '模型计划无效，已直接搜索原词。', stopReason: 'model_stop', statusText: '完成', finalRerank: 'idle',
     };
@@ -77,7 +77,7 @@ describe('extension content UI', () => {
     const root = createRoot(container);
     const base: SearchSnapshot = {
       query: '资料', phase: 'reranking', round: 1, requestsMade: 1, plan: null,
-      activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [],
+      activeSearches: [], executedSearches: [], inactiveSearches: [], results: [],
       softIsolatedResults: [],
       outOfRangeCount: 0, planningNotice: '', stopReason: null,
       statusText: '正在重排本地预排序前 30 条结果…', finalRerank: 'running',
@@ -113,7 +113,7 @@ describe('extension content UI', () => {
   it('shows separate result counts without exposing local presorting signals on ordinary cards', async () => {
     const container = document.createElement('div');
     const root = createRoot(container);
-    const active = { id: 'active', title: '高数资料', board: '学习天地', time: '2026-09-20', author: '', replyCount: 2, url: 'https://www.cc98.org/topic/active', firstRound: 3 };
+    const active = { id: 'active', title: '高数资料', board: '学习天地', time: '2026-09-20', author: '本地作者', replyCount: 2, url: 'https://www.cc98.org/topic/active', firstRound: 3 };
     const isolated = { ...active, id: 'isolated', title: '无关资料', url: 'https://www.cc98.org/topic/isolated' };
 
     await act(async () => root.render(<ResultLists
@@ -126,6 +126,7 @@ describe('extension content UI', () => {
     expect(container.querySelector('.result-counts')?.textContent).toBe('主结果 1 · 软隔离 1 · 时间范围外 2');
     const activeCard = container.querySelector('.result');
     expect(activeCard?.textContent).toContain('高数资料');
+    expect(activeCard?.textContent).toContain('本地作者');
     expect(activeCard?.textContent).not.toContain('首次命中');
     expect(activeCard?.textContent).not.toMatch(/等级|得分|检索词|排序原因|判断历史/u);
     await act(async () => root.unmount());
@@ -152,6 +153,7 @@ describe('extension content UI', () => {
     });
     expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('false');
     expect((root.querySelector('[aria-label="自然语言查询"]') as HTMLInputElement).placeholder).toBe('例如：找近两年的操作系统课程的讨论和资料');
+    expect(root.textContent).toContain('作者只在本地结果卡片显示，不会发送给模型');
 
     await act(async () => {
       (root.querySelector('[data-tab="settings"]') as HTMLButtonElement).click();

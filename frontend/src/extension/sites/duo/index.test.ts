@@ -64,7 +64,7 @@ describe('Duo source session', () => {
       query: '测试', executedSearches: [],
       candidates: page.hits.map((hit, index) => ({ key: `c${index}`, matchedQueries: ['测试'], ...modelMetadata(hit.candidate) })),
     });
-    expect(feedback.candidates).toEqual([{ key: 'c0', matchedQueries: ['测试'], title: '', author: '合成作者', publishedAt: '2026-09-18 12:00:00', section: '合成板块', replyCount: 3 }]);
+    expect(feedback.candidates).toEqual([{ key: 'c0', matchedQueries: ['测试'], title: '', publishedAt: '2026-09-18 12:00:00', section: '合成板块', replyCount: 3 }]);
     expect(JSON.stringify(feedback)).not.toContain('仅供本地的正文');
   });
 

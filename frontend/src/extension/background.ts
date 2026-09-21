@@ -64,7 +64,6 @@ function isFinalRerankInput(value: unknown): value is import('./types').FinalRer
     const item = candidate as Record<string, unknown>;
     return typeof item.key === 'string' && Boolean(item.key)
       && typeof item.title === 'string'
-      && (item.author === undefined || typeof item.author === 'string')
       && (item.publishedAt === undefined || typeof item.publishedAt === 'string')
       && (item.section === undefined || typeof item.section === 'string')
       && (item.replyCount === undefined || (typeof item.replyCount === 'number' && Number.isFinite(item.replyCount)));

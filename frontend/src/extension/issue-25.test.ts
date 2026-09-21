@@ -44,9 +44,9 @@ describe('issue #25 retrieval waves', () => {
         feedbackCalls.push(input);
         if (feedbackCalls.length === 1) {
           expect(calls).toEqual(['首词:first', '次词:first']);
-          return { judgments: [{ key: input.candidates![0].key, grade: 2 as const }], newSearches: [{ query: '新词', purpose: '' }], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '' };
+          return { judgments: [{ key: input.candidates![0].key, grade: 2 as const }], newSearches: [{ query: '新词', purpose: '', basis: 'evidence' as const, supportKeys: [input.candidates![0].key] }], stopSuggestions: [], shouldStop: false, reasoning: '' };
         }
-        return { judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' };
+        return { judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' };
       }),
     };
 
@@ -82,11 +82,11 @@ describe('issue #25 retrieval waves', () => {
         const positive = input.candidates!.find((candidate) => candidate.key !== shared?.key);
         if (inputs.length === 1) return {
           judgments: [...(shared ? [{ key: shared.key, grade: 0 as const }] : []), ...(positive ? [{ key: positive.key, grade: 2 as const }] : [])],
-          newSearches: [{ query: '新词', purpose: '' }], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '',
+          newSearches: [{ query: '新词', purpose: '', basis: 'evidence' as const, supportKeys: [positive!.key] }], stopSuggestions: [], shouldStop: false, reasoning: '',
         };
         return {
           judgments: shared ? [{ key: shared.key, grade: 2 as const }] : [],
-          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+          newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '',
         };
       }),
     };
@@ -109,7 +109,7 @@ describe('issue #25 retrieval waves', () => {
     const planner = {
       planFirstRound: async () => plan,
       planBlindExpansion: vi.fn(),
-      planFeedback: vi.fn(async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '' })),
+      planFeedback: vi.fn(async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: false, reasoning: '' })),
     };
     const source = {
       sourceId: 'cc98', ratePolicy: { maxSearchCalls: 10, minRequestIntervalMs: 0 },
@@ -132,11 +132,11 @@ describe('issue #25 retrieval waves', () => {
       planFeedback: vi.fn()
         .mockImplementationOnce(async (input: FeedbackRequestInput) => ({
           judgments: [{ key: input.candidates[0].key, grade: 0 as const }],
-          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '',
+          newSearches: [], stopSuggestions: [], shouldStop: false, reasoning: '',
         }))
         .mockImplementationOnce(async (input: FeedbackRequestInput) => ({
           judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
-          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+          newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '',
         })),
     };
     const source = {
@@ -157,7 +157,7 @@ describe('issue #25 retrieval waves', () => {
   it('completes feedback after a full wave even when that wave reaches the site request limit', async () => {
     const planFeedback = vi.fn(async (input: FeedbackRequestInput) => ({
       judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
-      newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '',
+      newSearches: [], stopSuggestions: [], shouldStop: false, reasoning: '',
     }));
     const result = await new SearchSession({
       planner: { planFirstRound: async () => plan, planBlindExpansion: vi.fn(), planFeedback },
@@ -267,7 +267,7 @@ describe('issue #25 feedback protocol', () => {
     expect(payload.candidates.length).toBeGreaterThan(0);
     expect(payload).not.toHaveProperty('round');
     expect(payload.candidates[0].matched_queries).toEqual(['次词', '第三词', '第四词']);
-    for (const forbidden of ['secret-source', 'secret-', 'https://secret.test', '片段', '正文', '回帖', 'authorization']) {
+    for (const forbidden of ['secret-source', 'secret-', 'https://secret.test', '作者', 'author', '片段', '正文', '回帖', 'authorization']) {
       expect(json).not.toContain(forbidden);
     }
   });

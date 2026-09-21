@@ -42,7 +42,7 @@ const initialPlan: ModelQueryPlan = {
 };
 
 const continueFeedback = () => ({
-  judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '',
+  judgments: [], newSearches: [], stopSuggestions: [], shouldStop: false, reasoning: '',
 });
 
 describe('SearchSession', () => {
@@ -56,7 +56,7 @@ describe('SearchSession', () => {
             key: candidate.key,
             grade: candidate.title.includes('求助') ? 3 as const : 2 as const,
           })),
-          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+          newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '',
         }),
         planBlindExpansion: vi.fn(),
       },
@@ -86,8 +86,7 @@ describe('SearchSession', () => {
           firstFeedbackInput = input;
           return {
             judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
-            newSearches: [{ query: '工科数学分析', purpose: '标题学到的叫法' }],
-            learnedTerms: ['工科数学分析'],
+            newSearches: [{ query: '工科数学分析', purpose: '标题学到的叫法', basis: 'evidence' as const, supportKeys: [input.candidates[0].key] }],
             stopSuggestions: ['微积分'],
             shouldStop: false,
             reasoning: '继续',
@@ -95,8 +94,8 @@ describe('SearchSession', () => {
         })
         .mockImplementationOnce(async (input) => ({
           judgments: [{ key: input.candidates[0].key, grade: 2 as const }],
-          newSearches: [{ query: '无人使用的扩展词', purpose: '验证枯竭' }],
-          learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '再试一次',
+          newSearches: [{ query: '无人使用的扩展词', purpose: '验证枯竭', basis: 'evidence' as const, supportKeys: [input.candidates[0].key] }],
+          stopSuggestions: [], shouldStop: false, reasoning: '再试一次',
         })),
       planBlindExpansion: vi.fn(),
     };
@@ -138,7 +137,6 @@ describe('SearchSession', () => {
     expect(firstFeedbackInput).toMatchObject({ candidates: expect.any(Array) });
     expect((firstFeedbackInput as { candidates: unknown[] }).candidates[0]).not.toHaveProperty('body');
     expect(result.plan?.requiredConcepts).toEqual(initialPlan.requiredConcepts);
-    expect(result.learnedTerms).toContain('工科数学分析');
     expect(result.executedSearches).toEqual(expect.arrayContaining(['高数', '微积分', '工科数学分析', '无人使用的扩展词']));
     expect(result.inactiveSearches).toContain('微积分');
     expect(result.stopReason).toBe('no_new_candidates');
@@ -189,7 +187,7 @@ describe('SearchSession', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => initialPlan,
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(vi.fn(async (query) => [{ id: query, title: query }])),
@@ -397,7 +395,7 @@ describe('SearchSession', () => {
     session.stop('replaced');
     finishFeedback({
       judgments: [{ key: 'c1', grade: 3 }],
-      newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+      newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '',
     });
     const result = await run;
 
@@ -420,7 +418,7 @@ describe('SearchSession', () => {
         planFirstRound: async () => timedPlan,
         planFeedback: async (input) => {
           feedbackCandidates = input.candidates;
-          return { judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' };
+          return { judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' };
         },
         planBlindExpansion: vi.fn(),
       },
@@ -445,7 +443,7 @@ describe('SearchSession', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => untimedPlan,
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(vi.fn(async () => [
@@ -471,7 +469,7 @@ describe('SearchSession', () => {
           searches: [{ query: '微积分', purpose: '模型计划无效，直接使用用户原词' }],
           usedOriginalQueryFallback: true,
         }),
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '足够' }),
         planBlindExpansion: vi.fn(),
       },
       source: asPageSource(searchTopics),
@@ -481,7 +479,8 @@ describe('SearchSession', () => {
     const result = await session.run('微积分', 60);
 
     expect(searchTopics).toHaveBeenCalledWith('微积分', 0, 20, expect.any(AbortSignal));
-    expect(result.planningNotice).toBe('模型计划无效，已直接搜索原词。');
+    expect(result.planningNotice).toContain('模型计划无效，已直接搜索原词。');
+    expect(result.planningNotice).toContain('查询组合不完整');
     expect(result.results.map((topic) => topic.id)).toEqual(['calculus']);
   });
 
@@ -561,7 +560,7 @@ describe('retrieved candidate documents', () => {
           searches: [{ query: '第一词', purpose: '' }, { query: '第二词', purpose: '' }],
           requiredConcepts: [{ name: 'A', expressions: ['alpha'] }, { name: 'B', expressions: ['beta'] }],
         }),
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
       },
       sleep: async () => undefined,
@@ -575,7 +574,7 @@ describe('retrieved candidate documents', () => {
 
 describe('core feedback privacy', () => {
   it('keeps body-derived titles and snippets local while sending only approved metadata', async () => {
-    const planFeedback = vi.fn(async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }));
+    const planFeedback = vi.fn(async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }));
     const session = new SearchSession({
       source: {
         sourceId: 'example', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' },
@@ -595,7 +594,7 @@ describe('core feedback privacy', () => {
     expect(result.results[0].title).toBe('正文派生的秘密标题');
     expect(planFeedback).toHaveBeenCalledWith({ query: '测试',
       executedSearches: [{ query: '测试', hitCount: 1 }],
-      candidates: [{ key: 'c0', matchedQueries: ['测试'], title: '', author: '公开作者', publishedAt: '2026-09-17', section: '公开板块', replyCount: 2 }],
+      candidates: [{ key: 'c0', matchedQueries: ['测试'], title: '', publishedAt: '2026-09-17', section: '公开板块', replyCount: 2 }],
     }, expect.any(AbortSignal));
   });
 });
@@ -652,7 +651,7 @@ describe('bounded feedback at the planner port', () => {
         planFeedback: async (input) => {
           received = JSON.stringify(input);
           count = input.candidates.length;
-          return { judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' };
+          return { judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' };
         },
         planBlindExpansion: vi.fn(),
       },
@@ -713,7 +712,7 @@ describe('issue #22 pagination and early stop', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => ({ ...timePlan, timeConstraint: { expression: '最近一个月', startDate: '2026-08-19', endDate: '2026-09-19' } }),
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: async () => ({ ...timePlan, searches: [{ query: '更宽检索词', purpose: '' }], timeConstraint: { expression: '最近一个月', startDate: '2026-08-19', endDate: '2026-09-19' } }),
       },
       source: { sourceId: 'cc98', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' },
@@ -799,7 +798,7 @@ describe('最终列表重排', () => {
   });
   const makePlanner = (rerankResults?: (input: { candidates: { key: string }[] }) => Promise<{ orderedKeys: string[]; removeKeys: string[] }>) => ({
     planFirstRound: async () => rerankPlan,
-    planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+    planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
     planBlindExpansion: vi.fn(),
     ...(rerankResults ? { rerankResults } : {}),
   });
@@ -817,7 +816,7 @@ describe('最终列表重排', () => {
             { key: input.candidates[0].key, grade: 3 as const },
             { key: input.candidates[1].key, grade: 1 as const },
           ],
-          newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '',
+          newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '',
         }),
       },
       source: makeSource(12), sleep: async () => undefined,
@@ -870,7 +869,7 @@ describe('最终列表重排', () => {
     const session = new SearchSession({
       planner: {
         ...makePlanner(rerankResults),
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: false, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: false, reasoning: '' }),
       },
       source,
       sleep: async () => undefined,
@@ -888,7 +887,7 @@ describe('最终列表重排', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => ({ ...rerankPlan, timeConstraint: { expression: '2025 年', startDate: '2025-01-01', endDate: '2025-12-31' } }),
-        planFeedback: async (input) => ({ judgments: [{ key: input.candidates[0].key, grade: 0 as const }], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async (input) => ({ judgments: [{ key: input.candidates[0].key, grade: 0 as const }], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
         rerankResults: async (input) => { seenTitles = input.candidates.map((candidate) => candidate.title); return { orderedKeys: [], removeKeys: [] }; },
       },
@@ -913,7 +912,7 @@ describe('最终列表重排', () => {
 
   it('关闭重排或主结果候选不足两条时跳过', async () => {
     const rerank = vi.fn(async () => ({ orderedKeys: [], removeKeys: [] }));
-    const disabledFeedback = vi.fn(async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }));
+    const disabledFeedback = vi.fn(async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }));
     const disabled = new SearchSession({
       planner: { ...makePlanner(rerank), planFeedback: disabledFeedback }, source: makeSource(3), sleep: async () => undefined,
       finalRerankEnabled: false,
@@ -1005,7 +1004,7 @@ describe('最终列表重排', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => rerankPlan,
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
         rerankResults: (_input: unknown, signal?: AbortSignal) => {
           rerankSignal = signal;
@@ -1027,7 +1026,7 @@ describe('最终列表重排', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => rerankPlan,
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
         rerankResults: (_input: unknown, signal?: AbortSignal) => new Promise((_resolve, reject) => {
           signal?.addEventListener('abort', () => reject(new DOMException('x', 'AbortError')), { once: true });
@@ -1054,7 +1053,7 @@ describe('最终列表重排', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => rerankPlan,
-        planFeedback: async () => ({ judgments: [], newSearches: [], learnedTerms: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
+        planFeedback: async () => ({ judgments: [], newSearches: [], stopSuggestions: [], shouldStop: true, reasoning: '' }),
         planBlindExpansion: vi.fn(),
         rerankResults: (input: { candidates: { key: string }[] }) => {
           rerankInput = input;

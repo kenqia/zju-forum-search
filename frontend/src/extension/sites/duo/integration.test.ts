@@ -14,7 +14,7 @@ describe('Duo through the unchanged search core', () => {
         return JSON.stringify({ searches: ['校园合成词'], required_concepts: [{ name: '课程', expressions: ['微积分'] }] });
       }
       if (messages.length === 2) {
-        return JSON.stringify({ judgments: [], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
+        return JSON.stringify({ judgments: [], new_searches: [], stop_suggestions: [], should_stop: true, reasoning: '' });
       }
       return JSON.stringify({ remove_keys: [] });
     } }, DEFAULT_SETTINGS, DUO_CAPABILITIES);
@@ -34,8 +34,8 @@ describe('Duo through the unchanged search core', () => {
     expect(messages).toHaveLength(3);
     expect(messages[0][0].content).toContain('匹配全文');
     expect(JSON.parse(messages[1][1].content).candidates).toEqual([
-      { key: 'c1', matched_queries: ['校园合成词'], title: '', author: '作者乙', board: '', time: '', reply_count: 0 },
-      { key: 'c0', matched_queries: ['校园合成词'], title: '', author: '作者甲', board: '', time: '', reply_count: 0 },
+      { key: 'c1', matched_queries: ['校园合成词'], title: '', board: '', time: '', reply_count: 0 },
+      { key: 'c0', matched_queries: ['校园合成词'], title: '', board: '', time: '', reply_count: 0 },
     ]);
     expect(messages[1][1].content).not.toContain('正文只供本地匹配');
   });

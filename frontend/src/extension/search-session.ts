@@ -39,7 +39,6 @@ export interface SearchSnapshot {
   activeSearches: string[];
   executedSearches: string[];
   inactiveSearches: string[];
-  learnedTerms: string[];
   results: TopicCandidate[];
   softIsolatedResults: TopicCandidate[];
   outOfRangeCount: number;
@@ -119,7 +118,7 @@ export class SearchSession {
   private requestedStop: SearchStopReason | null = null;
   private snapshot: SearchSnapshot = {
     query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
-    activeSearches: [], executedSearches: [], inactiveSearches: [], learnedTerms: [], results: [], softIsolatedResults: [],
+    activeSearches: [], executedSearches: [], inactiveSearches: [], results: [], softIsolatedResults: [],
     outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '', finalRerank: 'idle',
   };
 
@@ -229,7 +228,6 @@ export class SearchSession {
     const candidates = new Map<string, RetrievedCandidate>();
     const executed = new Map<string, { query: string; hitCount: number }>();
     const inactive = new Set<string>();
-    const learned = new Set<string>();
     let round = 1;
     let temporaryKeySequence = 0;
     let firstWave = true;
@@ -255,7 +253,14 @@ export class SearchSession {
       if (this.requestedStop) return this.finish(this.requestedStop, runContext());
       this.publish({
         plan,
-        planningNotice: plan.usedOriginalQueryFallback ? '模型计划无效，已直接搜索原词。' : '',
+        planningNotice: [
+          plan.usedOriginalQueryFallback ? '模型计划无效，已直接搜索原词。' : '',
+          this.source.capabilities.searchSurface === 'title'
+            && (!plan.searches.some((search) => search.role === 'anchor')
+              || !plan.searches.some((search) => search.role !== 'anchor'))
+            ? '查询组合不完整，仍将执行现有检索词。'
+            : '',
+        ].filter(Boolean).join(' '),
       });
       const enqueueFirstPages = (searches: PlannedSearch[]) => {
         for (const search of searches) {
@@ -265,7 +270,18 @@ export class SearchSession {
           pendingFirstPages.push(search);
         }
       };
-      enqueueFirstPages(plan.searches);
+      const prioritizedSearches = (() => {
+        if (this.source.capabilities.searchSurface !== 'title' || maxRequests < 2) return plan.searches;
+        const anchor = plan.searches.find((search) => search.role === 'anchor');
+        const nonAnchor = plan.searches.find((search) => search.role !== 'anchor');
+        if (!anchor || !nonAnchor) return plan.searches;
+        const protectedSearches = new Set([anchor, nonAnchor]);
+        return [
+          ...plan.searches.filter((search) => protectedSearches.has(search)),
+          ...plan.searches.filter((search) => !protectedSearches.has(search)),
+        ];
+      })();
+      enqueueFirstPages(prioritizedSearches);
       const startDate = plan.timeConstraint.startDate;
 
       const candidateView = () => {
@@ -401,8 +417,6 @@ export class SearchSession {
         }), this.controller.signal), this.controller.signal, '反馈调用已终止');
         if (this.requestedStop) return this.finish(this.requestedStop, runContext());
         applyFeedbackJudgments(selected.entries, feedback.judgments);
-        const mayExpand = feedback.judgments.some((judgment) => judgment.grade === 2 || judgment.grade === 3);
-        if (mayExpand) feedback.learnedTerms.forEach((term) => learned.add(term));
         feedback.stopSuggestions.forEach((suggestion) => {
           const match = executed.get(folded(suggestion));
           if (match?.hitCount === 0) inactive.add(match.query);
@@ -412,13 +426,25 @@ export class SearchSession {
           results: judgedView.results,
           softIsolatedResults: judgedView.softIsolatedResults,
           outOfRangeCount: judgedView.outOfRangeCount,
-          learnedTerms: [...learned], inactiveSearches: [...inactive],
+          inactiveSearches: [...inactive],
         });
         if (this.snapshot.requestsMade >= maxRequests) {
           return this.finish('request_limit', runContext(), `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`);
         }
         if (feedback.shouldStop) return this.finish('model_stop', runContext());
-        if (mayExpand) enqueueFirstPages(feedback.newSearches);
+        const positiveJudgmentKeys = new Set(feedback.judgments
+          .filter((judgment) => judgment.grade === 2 || judgment.grade === 3)
+          .map((judgment) => judgment.key));
+        const nativeTitleKeys = new Set(selected.entries
+          .filter((entry) => entry.candidate.titleOrigin === 'native' && entry.candidate.title.trim())
+          .map((entry) => entry.temporaryKey));
+        enqueueFirstPages(feedback.newSearches.filter((search) => {
+          const supportKeys = [...new Set(search.supportKeys ?? [])];
+          return search.basis === 'evidence'
+            && supportKeys.length >= 1
+            && supportKeys.length <= 3
+            && supportKeys.every((key) => positiveJudgmentKeys.has(key) && nativeTitleKeys.has(key));
+        }));
         round += 1;
       }
     } catch (error) {

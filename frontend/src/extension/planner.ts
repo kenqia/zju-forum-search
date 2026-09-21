@@ -1,7 +1,7 @@
 import { buildFeedbackPayload } from './feedback-payload';
 import { buildFinalRerankPayload, normalizeFinalRerankPlan } from './final-reranking';
 import { folded, normalizeText } from './text';
-import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, FinalRerankPlan, FinalRerankRequestInput, ModelQueryPlan, PlannedSearch, SourceCapabilities, TimeConstraint } from './types';
+import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, FeedbackSearch, FinalRerankPlan, FinalRerankRequestInput, ModelQueryPlan, PlannedSearch, QueryRole, SourceCapabilities, TimeConstraint } from './types';
 
 export interface PlannerTransport {
   chatCompletions(settings: ExtensionSettings, messages: { role: string; content: string }[], signal?: AbortSignal): Promise<string>;
@@ -144,18 +144,46 @@ function searchList(values: unknown): PlannedSearch[] {
   return uniqueBy(
     (Array.isArray(values) ? values : [])
       .map((item) => {
-        if (typeof item === 'string') return { query: normalizeText(item), purpose: '' };
+        if (typeof item === 'string') return { query: normalizeText(item), purpose: '', role: 'balanced' as const };
         const source = item && typeof item === 'object' && !Array.isArray(item)
           ? item as Record<string, unknown>
           : {};
         return {
           query: normalizeText(source.query),
           purpose: normalizeText(source.purpose),
+          role: (source.role === 'precise' || source.role === 'balanced' || source.role === 'anchor'
+            ? source.role
+            : 'balanced') as QueryRole,
         };
       })
       .filter((item) => item.query),
     (item) => folded(item.query),
   );
+}
+
+function feedbackSearchList(values: unknown, positiveKeys: Set<string>): FeedbackSearch[] {
+  const searches: FeedbackSearch[] = [];
+  for (const item of Array.isArray(values) ? values : []) {
+    if (!isRecord(item)) continue;
+    const query = normalizeText(item.query);
+    const purpose = normalizeText(item.purpose);
+    const basis = item.basis;
+    if (!query || (basis !== 'query' && basis !== 'evidence')) continue;
+    const supportKeys = uniqueBy(
+      (Array.isArray(item.support_keys) ? item.support_keys : [])
+        .filter((key): key is string => typeof key === 'string')
+        .map(normalizeText)
+        .filter(Boolean),
+      (key) => key,
+    );
+    if (basis === 'query') {
+      if (!supportKeys.length) searches.push({ query, purpose, basis, supportKeys });
+      continue;
+    }
+    if (supportKeys.length < 1 || supportKeys.length > 3 || supportKeys.some((key) => !positiveKeys.has(key))) continue;
+    searches.push({ query, purpose, basis, supportKeys });
+  }
+  return uniqueBy(searches, (search) => folded(search.query));
 }
 
 export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
@@ -186,9 +214,8 @@ export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
   };
 }
 
-export function normalizeFeedbackPlan(raw: unknown, validKeys?: Set<string>): FeedbackPlan {
+export function normalizeFeedbackPlan(raw: unknown, validKeys?: Set<string>, evidenceKeys: Set<string> = validKeys ?? new Set()): FeedbackPlan {
   const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const newSearches = searchList(source.new_searches);
   const judgments = new Map<string, 0 | 1 | 2 | 3>();
   if (Array.isArray(source.judgments)) {
     for (const item of source.judgments) {
@@ -198,10 +225,12 @@ export function normalizeFeedbackPlan(raw: unknown, validKeys?: Set<string>): Fe
         && (item.grade === 0 || item.grade === 1 || item.grade === 2 || item.grade === 3)) judgments.set(key, item.grade);
     }
   }
+  const positiveKeys = new Set([...judgments]
+    .filter(([key, grade]) => (grade === 2 || grade === 3) && evidenceKeys.has(key))
+    .map(([key]) => key));
   return {
     judgments: [...judgments].map(([key, grade]) => ({ key, grade })),
-    newSearches,
-    learnedTerms: textList(source.learned_terms),
+    newSearches: feedbackSearchList(source.new_searches, positiveKeys),
     stopSuggestions: textList(source.stop_suggestions),
     shouldStop: source.should_stop === true,
     reasoning: normalizeText(source.reasoning),
@@ -225,8 +254,6 @@ function assertFeedbackShape(value: unknown): asserts value is Record<string, un
   if (!isRecord(value)
     || !Array.isArray(value.judgments)
     || !Array.isArray(value.new_searches)
-    || !value.new_searches.every((item) => isRecord(item) && typeof item.query === 'string' && typeof item.purpose === 'string')
-    || (value.learned_terms !== undefined && (!Array.isArray(value.learned_terms) || !value.learned_terms.every((term) => typeof term === 'string')))
     || (value.stop_suggestions !== undefined && (!Array.isArray(value.stop_suggestions) || !value.stop_suggestions.every((term) => typeof term === 'string')))
     || typeof value.should_stop !== 'boolean'
     || (value.reasoning !== undefined && typeof value.reasoning !== 'string')) {
@@ -258,7 +285,7 @@ function originalQueryFallback(query: string): ModelQueryPlan {
   const normalized = normalizeText(query);
   return {
     summary: `直接搜索原词：${normalized}`,
-    searches: [{ query: normalized, purpose: '模型计划无效，直接使用用户原词' }],
+    searches: [{ query: normalized, purpose: '模型计划无效，直接使用用户原词', role: 'balanced' }],
     requiredConcepts: [],
     excludedTerms: [],
     timeConstraint: { expression: '', startDate: null, endDate: null },
@@ -283,12 +310,13 @@ export function firstRoundSystemPrompt(capabilities: SourceCapabilities): string
   return `你是搜索查询规划器。根据用户的自然语言查询生成 JSON 查询计划。
 
 ${sourceInstructions(capabilities)}
-检索词应覆盖高信号原词、稳定简称、同义表达和有价值的精确组合。不要机械拆分中文短语。不要假设你看过来源内容。用户消息中的 current_date 是扩展所在设备的当前日期，所有相对时间约束都必须据此换算为明确日期。
+检索词应覆盖高信号原词、稳定简称、同义表达和有价值的精确组合。每个检索词都标记 role：precise 组合多个意图约束，balanced 保留部分约束，anchor 只保留稳定的核心实体或概念。不要机械拆分中文短语。不要假设你看过来源内容。用户消息中的 current_date 是扩展所在设备的当前日期，所有相对时间约束都必须据此换算为明确日期。
+${capabilities.searchSurface === 'title' ? '标题来源的查询组合必须至少包含一个 anchor 和至少一个非 anchor。"求助"、"经验"、"帖子"、"有没有"等通用宽词不能作为 anchor。' : ''}
 
 返回以下 JSON 对象，不要返回额外字段或解释文字：
 {
   "summary": "对检索目标的简短解释",
-  "searches": [{"query": "发送给搜索接口的检索词", "purpose": "这次检索补足什么"}],
+  "searches": [{"query": "发送给搜索接口的检索词", "purpose": "这次检索补足什么", "role": "precise | balanced | anchor"}],
   "required_concepts": [{"name": "必须满足的概念", "expressions": ["检索内容中可能出现的表达"]}],
   "excluded_terms": ["命中后应降权的表达"],
   "time_constraint": {"expression": "用户原始时间约束", "start_date": "YYYY-MM-DD 或 null", "end_date": "YYYY-MM-DD 或 null"}
@@ -298,21 +326,21 @@ ${sourceInstructions(capabilities)}
 export function feedbackSystemPrompt(capabilities: SourceCapabilities): string {
   return `你是迭代检索的语义反馈规划器。
 ${sourceInstructions(capabilities)}
-你会看到本检索波次选出的候选临时键、最多三个不同检索支持，以及白名单元数据（仅原生标题、作者、发布时间、板块、回复数）。一次完成相关性判断、下一轮检索词和停止判断。
+你会看到本检索波次选出的候选临时键、最多三个不同检索支持，以及白名单元数据（仅原生标题、发布时间、板块、回复数）。一次完成相关性判断、下一轮检索词和停止判断。
 正文和命中片段不会提供给你。正文派生的显示标题也不会发送，反馈标题为空。没有原生标题时，只能依据查询、检索命中数和其他允许的元数据决定后续搜索；不得推测正文或声称从正文学习到了词汇。
 
 规则：
 - 给每个能判断的候选返回 0、1、2 或 3：3 明确高度相关，2 大概率相关，1 信息不足、部分相关或不确定，0 明确无关。拿不准时用 1。
-- 只追加新检索词或建议停用已执行且零命中的词；不得修改首轮确定的必须概念、排除词、时间约束。
-- 只有 grade 2 或 grade 3 候选可以指导查询扩展；不得从 grade 0、grade 1 或未判断候选学习检索词。
+- 只追加新检索词或建议停用已执行且累计零命中的词；不得修改首轮确定的必须概念、排除词、时间约束。
+- 每条新检索词必须声明 basis。query 表示只根据原始查询放宽表达，support_keys 必须为空。evidence 表示从本轮候选的原生标题学习，必须提供 1 至 3 个去重 support_keys，且每个键都在本响应中获得 grade 2 或 grade 3。
+- evidence 检索词只能从支持候选的原生标题学习。板块可以帮助判断相关性，但不能作为新检索词的词汇来源。回复数不能单独提高 grade，也不能作为新检索词的词汇来源。
 - 若候选已饱和或继续搜索价值低，返回 should_stop: true。
 - 不要重复已执行过的检索词。
 
 返回 JSON：
 {
   "judgments": [{"key": "候选临时键", "grade": 0}],
-  "new_searches": [{"query": "下一轮检索词", "purpose": "补足什么"}],
-  "learned_terms": ["从标题学到的词汇"],
+  "new_searches": [{"query": "下一轮检索词", "purpose": "补足什么", "basis": "query | evidence", "support_keys": ["证据候选临时键"]}],
   "stop_suggestions": ["建议停用的已执行检索词"],
   "should_stop": false,
   "reasoning": "一句话说明判断"
@@ -320,8 +348,8 @@ ${sourceInstructions(capabilities)}
 }
 
 export function finalRerankSystemPrompt(): string {
-  return `你是搜索结果的最终列表重排器。输入是用户的原始查询和一个小规模候选列表，其中只有运行内临时键和白名单元数据（原生标题、作者、发布时间、板块、回复数）。
-按查询意图返回候选的相对顺序，并只建议移除明确无关的候选。正文、回帖、命中片段、等级、检索支持、平台 ID、URL、来源位次和轮次都不会提供；正文派生标题为空时只能依据其他元数据判断，不得推测正文。拿不准时保留。不要改写临时键。
+  return `你是搜索结果的最终列表重排器。输入是用户的原始查询和一个小规模候选列表，其中只有运行内临时键和白名单元数据（原生标题、发布时间、板块、回复数）。
+按查询意图返回候选的相对顺序，并只建议移除明确无关的候选。板块可以帮助判断查询意图。回复数只能在其他相关性信号接近时作为弱破同分信号，不能单独提高相关性。正文、回帖、命中片段、等级、检索支持、平台 ID、URL、来源位次和轮次都不会提供；正文派生标题为空时只能依据其他元数据判断，不得推测正文。拿不准时保留。不要改写临时键。
 
 返回 JSON：
 { "ordered_keys": ["按相关性排列的候选临时键"], "remove_keys": ["明确建议移除的候选临时键"] }`;
@@ -361,7 +389,11 @@ export class PlannerClient {
     const content = await this.transport.chatCompletions(this.settings, buildFeedbackMessages(input, this.capabilities, this.today()), signal);
     const raw = parseJson(content);
     assertFeedbackShape(raw);
-    return normalizeFeedbackPlan(raw, new Set(input.candidates.map((candidate) => candidate.key)));
+    return normalizeFeedbackPlan(
+      raw,
+      new Set(input.candidates.map((candidate) => candidate.key)),
+      new Set(input.candidates.filter((candidate) => candidate.title.trim()).map((candidate) => candidate.key)),
+    );
   }
 
   async planBlindExpansion(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {

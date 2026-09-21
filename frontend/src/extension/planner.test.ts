@@ -16,13 +16,13 @@ describe('PlannerClient', () => {
 
     await expect(client.rerankResults({
       query: '资料',
-      candidates: [{ key: 'c0', title: '高数资料', author: '作者' }, { key: 'c1', title: '微积分资料' }],
+      candidates: [{ key: 'c0', title: '高数资料' }, { key: 'c1', title: '微积分资料' }],
     })).resolves.toEqual({ orderedKeys: ['c1'], removeKeys: ['c0'] });
     expect(wirePayload).toEqual({
       query: '资料',
       candidates: [
-        { key: 'c0', title: '高数资料', author: '作者', board: '', time: '', reply_count: 0 },
-        { key: 'c1', title: '微积分资料', author: '', board: '', time: '', reply_count: 0 },
+        { key: 'c0', title: '高数资料', board: '', time: '', reply_count: 0 },
+        { key: 'c1', title: '微积分资料', board: '', time: '', reply_count: 0 },
       ],
     });
   });
@@ -40,7 +40,7 @@ describe('PlannerClient', () => {
     const prompts: string[] = [];
     const client = new PlannerClient({ chatCompletions: async (_settings, messages) => {
       prompts.push(messages[0].content);
-      return JSON.stringify({ searches: ['高数'], judgments: [], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '' });
+      return JSON.stringify({ searches: ['高数'], judgments: [], new_searches: [], stop_suggestions: [], should_stop: true, reasoning: '' });
     } }, DEFAULT_SETTINGS, { searchSurface, querySyntax, resultOrdering: 'time-desc' });
     await client.planFirstRound('高数');
     await client.planBlindExpansion('高数');
@@ -65,7 +65,7 @@ describe('PlannerClient', () => {
         summary: '近三年微积分资料', searches: [{ query: '高数', purpose: '' }], required_concepts: [], excluded_terms: [],
         time_constraint: { expression: '近三年', start_date: '2023-09-15', end_date: '2026-09-15' },
       }),
-      JSON.stringify({ judgments: [], new_searches: [], learned_terms: [], stop_suggestions: [], should_stop: true, reasoning: '足够' }),
+      JSON.stringify({ judgments: [], new_searches: [], stop_suggestions: [], should_stop: true, reasoning: '足够' }),
     ];
     const client = new PlannerClient({
       chatCompletions: async (_settings, messages) => {
@@ -99,7 +99,7 @@ describe('PlannerClient', () => {
 
     await expect(client.planFirstRound('微积分')).resolves.toEqual({
       summary: '微积分',
-      searches: [{ query: '微积分', purpose: '' }, { query: '高数', purpose: '' }],
+      searches: [{ query: '微积分', purpose: '', role: 'balanced' }, { query: '高数', purpose: '', role: 'balanced' }],
       requiredConcepts: [],
       excludedTerms: [],
       timeConstraint: { expression: '', startDate: null, endDate: null },
@@ -119,7 +119,7 @@ describe('PlannerClient', () => {
 
     await expect(client.planFirstRound('微积分')).resolves.toMatchObject({
       summary: '直接搜索原词：微积分',
-      searches: [{ query: '微积分', purpose: '模型计划无效，直接使用用户原词' }],
+      searches: [{ query: '微积分', purpose: '模型计划无效，直接使用用户原词', role: 'balanced' }],
       requiredConcepts: [],
       excludedTerms: [],
       timeConstraint: { expression: '', startDate: null, endDate: null },
@@ -196,7 +196,7 @@ describe('PlannerClient', () => {
       time_constraint: { expression: '2025 年', start_date: '2025-01-01', end_date: '2025-12-31' },
     })).toEqual({
       summary: '资料',
-      searches: [{ query: '高数', purpose: '' }],
+      searches: [{ query: '高数', purpose: '', role: 'balanced' }],
       requiredConcepts: [{ name: '课程', expressions: ['高数', '高等数学'] }],
       excludedTerms: ['求助'],
       timeConstraint: { expression: '2025 年', startDate: '2025-01-01', endDate: '2025-12-31' },
@@ -279,7 +279,6 @@ describe('feedback privacy boundary', () => {
     expect(payload.candidates).toEqual([{
       key: 'c0', matched_queries: ['高数'],
       title: '题'.repeat(80),
-      author: 'alice',
       board: '学习天地',
       time: '2026-09-15',
       reply_count: 8,
