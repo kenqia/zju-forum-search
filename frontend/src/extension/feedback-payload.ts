@@ -1,15 +1,16 @@
 import { modelMetadataPayload } from './model-metadata';
-import { folded } from './text';
+import { folded, normalizeText } from './text';
 import type { FeedbackCandidate, FeedbackRequestInput, SearchLedgerEntry } from './types';
 
 export const FEEDBACK_CANDIDATE_LIMIT = 100;
 export const FEEDBACK_METADATA_BYTE_LIMIT = 4000;
+export const FEEDBACK_SEARCH_QUERY_LIMIT = 120;
 
 function sanitizedCandidate(candidate: FeedbackCandidate): FeedbackCandidate {
   const matchedQueries: string[] = [];
   const seenQueries = new Set<string>();
   for (let index = candidate.matchedQueries.length - 1; index >= 0 && matchedQueries.length < 3; index -= 1) {
-    const query = candidate.matchedQueries[index].slice(0, 120);
+    const query = normalizeText(candidate.matchedQueries[index]).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT);
     const key = folded(query);
     if (!key || seenQueries.has(key)) continue;
     seenQueries.add(key);
@@ -31,7 +32,7 @@ function nonNegativeInteger(value: number | undefined): number {
 
 function sanitizedLedgerEntry(entry: SearchLedgerEntry): SearchLedgerEntry {
   return {
-    query: entry.query.slice(0, 120),
+    query: normalizeText(entry.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT),
     pages: nonNegativeInteger(entry.pages),
     hits: nonNegativeInteger(entry.hits),
     uniqueCandidates: nonNegativeInteger(entry.uniqueCandidates),
@@ -58,7 +59,7 @@ export function createFeedbackInput(input: FeedbackRequestInput): FeedbackReques
     if (!fits()) result.searchLedger!.pop();
   }
   for (const search of input.executedSearches.slice(0, 30)) {
-    result.executedSearches.push({ query: search.query.slice(0, 120), hitCount: search.hitCount });
+    result.executedSearches.push({ query: normalizeText(search.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT), hitCount: search.hitCount });
     if (!fits()) result.executedSearches.pop();
   }
   for (const candidate of input.candidates.slice(0, FEEDBACK_CANDIDATE_LIMIT)) {
@@ -92,7 +93,7 @@ export function buildFeedbackPayload(input: FeedbackRequestInput, currentDate?: 
     if (encoder.encode(JSON.stringify(payload)).byteLength > FEEDBACK_METADATA_BYTE_LIMIT) payload.search_ledger!.pop();
   }
   for (const search of input.executedSearches.slice(0, 30)) {
-    payload.executed_searches.push({ query: search.query.slice(0, 120), hit_count: search.hitCount });
+    payload.executed_searches.push({ query: normalizeText(search.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT), hit_count: search.hitCount });
     if (encoder.encode(JSON.stringify(payload)).byteLength > FEEDBACK_METADATA_BYTE_LIMIT) {
       payload.executed_searches.pop();
     }

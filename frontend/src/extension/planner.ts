@@ -1,7 +1,7 @@
-import { buildFeedbackPayload } from './feedback-payload';
+import { buildFeedbackPayload, FEEDBACK_SEARCH_QUERY_LIMIT } from './feedback-payload';
 import { buildFinalRerankPayload, normalizeFinalRerankPlan } from './final-reranking';
 import { folded, normalizeText } from './text';
-import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, FeedbackSearch, FinalRerankPlan, FinalRerankRequestInput, ModelQueryPlan, PlannedSearch, QueryRole, SourceCapabilities, TimeConstraint } from './types';
+import type { ExtensionSettings, FeedbackPlan, FeedbackRequestInput, FeedbackSearch, FinalRerankPlan, FinalRerankRequestInput, ModelQueryPlan, PlannedSearch, QueryRole, SourceCapabilities, StopQuerySuggestion, TimeConstraint } from './types';
 
 export interface PlannerTransport {
   chatCompletions(settings: ExtensionSettings, messages: { role: string; content: string }[], signal?: AbortSignal): Promise<string>;
@@ -194,6 +194,28 @@ function feedbackSearchList(
   return uniqueBy(searches, (search) => folded(search.query));
 }
 
+const STOP_REASON_LIMIT = 160;
+
+function stopQueryList(values: unknown, allowLegacyStrings = false): StopQuerySuggestion[] {
+  const suggestions: StopQuerySuggestion[] = [];
+  const seen = new Set<string>();
+  for (const item of Array.isArray(values) ? values : []) {
+    const source = allowLegacyStrings && typeof item === 'string'
+      ? { query: item, reason: '' }
+      : isRecord(item) && typeof item.query === 'string' && typeof item.reason === 'string'
+        ? item : null;
+    if (!source) continue;
+    const query = normalizeText(source.query);
+    if (query.length > FEEDBACK_SEARCH_QUERY_LIMIT) continue;
+    const reason = normalizeText(source.reason).slice(0, STOP_REASON_LIMIT);
+    const key = folded(query);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    suggestions.push({ query, reason });
+  }
+  return suggestions;
+}
+
 export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
   const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const searches = searchList(source.searches);
@@ -233,10 +255,13 @@ export function normalizeFeedbackPlan(raw: unknown, validKeys?: Set<string>, evi
         && (item.grade === 0 || item.grade === 1 || item.grade === 2 || item.grade === 3)) judgments.set(key, item.grade);
     }
   }
+  const legacyStopQueries = stopQueryList(source.stop_suggestions, true);
   return {
     judgments: [...judgments].map(([key, grade]) => ({ key, grade })),
     newSearches: feedbackSearchList(source.new_searches, judgments, evidenceKeys),
-    stopSuggestions: textList(source.stop_suggestions),
+    stopQueries: [...stopQueryList(source.stop_queries), ...legacyStopQueries]
+      .filter((suggestion, index, all) => all.findIndex((item) => folded(item.query) === folded(suggestion.query)) === index),
+    stopSuggestions: legacyStopQueries.map(({ query }) => query),
     shouldStop: source.should_stop === true,
     reasoning: normalizeText(source.reasoning),
   };
@@ -259,7 +284,8 @@ function assertFeedbackShape(value: unknown): asserts value is Record<string, un
   if (!isRecord(value)
     || !Array.isArray(value.judgments)
     || !Array.isArray(value.new_searches)
-    || (value.stop_suggestions !== undefined && (!Array.isArray(value.stop_suggestions) || !value.stop_suggestions.every((term) => typeof term === 'string')))
+    || (value.stop_suggestions !== undefined && !Array.isArray(value.stop_suggestions))
+    || (value.stop_queries !== undefined && !Array.isArray(value.stop_queries))
     || typeof value.should_stop !== 'boolean'
     || (value.reasoning !== undefined && typeof value.reasoning !== 'string')) {
     throw new PlannerError('模型返回的反馈计划结构无效');
@@ -337,10 +363,11 @@ ${sourceInstructions(capabilities)}
 规则：
 - 给每个能判断的候选返回 0、1、2 或 3：3 明确高度相关，2 大概率相关，1 信息不足、部分相关或不确定，0 明确无关。拿不准时用 1。
 - candidates 可以为空。没有候选或当前没有 grade 2/3 时，可以仅根据原始查询提出 query 依据的救援检索词，用同义语、上位词、缩短表达或概念拆分放宽召回。
-- 只追加新检索词或建议停用已执行且累计零命中的词；不得修改首轮确定的必须概念、排除词、时间约束。
+- 只追加新检索词，或建议停止仍有 continuation 的已执行检索词；不得修改首轮确定的必须概念、排除词、时间约束。stop_queries 不是用户维护的停用词表，只控制本次运行的一个检索分支。
 - 每条新检索词必须声明 basis。query 表示只根据原始查询放宽表达，support_keys 必须为空。evidence 表示从本轮候选的原生标题学习，必须提供 1 至 3 个去重 support_keys。支持集合只含 grade 1 时必须声明 clue_only: true；支持集合中有 grade 2/3 时按普通 evidence 扩展处理，即使同时包含 grade 1。grade 0 不能提供支持。
 - evidence 检索词只能从支持候选的原生标题学习。板块可以帮助判断相关性，但不能作为新检索词的词汇来源。回复数不能单独提高 grade，也不能作为新检索词的词汇来源。
 - clue_only 只声明 grade 1 候选提供下一跳线索。本地只核对支持关系、当前 grade 和原生标题可见性，不做标题子串、词元重叠或语义相似度校验。
+- stop_queries 逐条填写 query 和简短 reason。只能建议已执行、当前仍有 continuation 的检索词；未执行、已耗尽、空白或重复检索词不要填写。reason 只用于本地诊断，不参与执行判断，也不会进入结果卡片。
 - should_stop 只建议关闭后续扩展，不会取消已入队首页或已知分页。若候选已饱和或不必再产生扩展词，返回 should_stop: true。
 - 不要重复已执行过的检索词。
 
@@ -348,7 +375,7 @@ ${sourceInstructions(capabilities)}
 {
   "judgments": [{"key": "候选临时键", "grade": 0}],
   "new_searches": [{"query": "下一轮检索词", "purpose": "补足什么", "basis": "query | evidence", "support_keys": ["证据候选临时键"], "clue_only": false}],
-  "stop_suggestions": ["建议停用的已执行检索词"],
+  "stop_queries": [{"query": "已执行且仍有 continuation 的检索词", "reason": "停止原因"}],
   "should_stop": false,
   "reasoning": "一句话说明判断"
 }`;

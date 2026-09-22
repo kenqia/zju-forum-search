@@ -3,7 +3,7 @@ import { hasExplicitTimeConstraint } from './planner';
 import { folded, normalizeText } from './text';
 import { rankAndFilterCandidates, type RankedCandidateView } from './ranking';
 import { mergeHits } from './retrieval';
-import { createFeedbackInput } from './feedback-payload';
+import { createFeedbackInput, FEEDBACK_SEARCH_QUERY_LIMIT } from './feedback-payload';
 import { applyFeedbackJudgments, selectFeedbackEvidence } from './feedback-evidence';
 import { applyFinalRerankPlan, createFinalRerankSelection, type FinalRerankSelection } from './final-reranking';
 import { PaginationCursorGuard, pagePredatesStart } from './pagination';
@@ -474,10 +474,18 @@ export class SearchSession {
         );
         if (this.requestedStop) return this.finish(this.requestedStop, runContext());
         applyFeedbackJudgments(selected.entries, feedback.judgments);
-        feedback.stopSuggestions.forEach((suggestion) => {
-          const match = executed.get(folded(suggestion));
-          if (match?.hitCount === 0) inactive.add(match.query);
-        });
+        const stopQueries = feedback.stopQueries
+          ?? feedback.stopSuggestions.map((query) => ({ query, reason: '' }));
+        for (const suggestion of stopQueries) {
+          const stopKey = folded(normalizeText(suggestion.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT));
+          if (!stopKey) continue;
+          const matches = [...continuations].filter(([key, continuation]) => executed.has(key)
+            && folded(normalizeText(continuation.search.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT)) === stopKey);
+          if (matches.length !== 1) continue;
+          // A query stop only removes this branch's next page. It does not
+          // cancel queued first pages, consume requests, or close expansion.
+          continuations.delete(matches[0][0]);
+        }
         const judgedView = candidateView();
         this.publish({
           results: judgedView.results,

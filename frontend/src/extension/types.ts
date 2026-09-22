@@ -160,9 +160,17 @@ export interface FeedbackSearch {
   clueOnly?: boolean;
 }
 
+export interface StopQuerySuggestion {
+  query: string;
+  reason: string;
+}
+
 export interface FeedbackPlan {
   judgments: FeedbackJudgment[];
   newSearches: FeedbackSearch[];
+  /** New protocol: stop continuation for one already-executed branch. */
+  stopQueries?: StopQuerySuggestion[];
+  /** Legacy wire compatibility; new model prompts must use stop_queries. */
   stopSuggestions: string[];
   shouldStop: boolean;
   reasoning: string;
