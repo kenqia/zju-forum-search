@@ -55,6 +55,14 @@ bash frontend/scripts/issue-31-acceptance-wizard.sh
 
 向导先运行完整测试、类型检查、生产构建和扩展产物检查，再引导人工检查真实登录会话中的搜索进度、结果保留和终止文案。空候选、弱信号、请求预留、停止门、短页分页和请求上限由 mock 测试验收；向导不会读取或保存 API key、Cookie、认证头、请求内容或模型响应。
 
+验收 Issue #34 的检索事实、Search Ledger 和 `clue_only` 扩展时运行：
+
+```bash
+bash frontend/scripts/issue-34-acceptance-wizard.sh
+```
+
+向导先验证 Final Rerank 检索事实、Ledger 统计、4000 字节装载顺序、字段白名单和 `clue_only` 等级矩阵，再引导在真实登录会话中只核对模型请求的字段名。它不会读取或保存 API key、Cookie、认证头、请求字段值、帖子内容或模型响应。
+
 ## 模型设置
 
 打开悬浮球，在“模型设置”中填写：
