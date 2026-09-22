@@ -582,7 +582,10 @@ describe('core feedback privacy', () => {
     const result = await session.run('测试', 60);
     expect(result.results[0].title).toBe('正文派生的秘密标题');
     expect(planFeedback).toHaveBeenCalledWith({ query: '测试',
+      remainingRequests: 29,
       executedSearches: [{ query: '测试', hitCount: 1 }],
+      searchLedger: [{ query: '测试', pages: 1, hits: 1, uniqueCandidates: 1, newOnLastPage: 1,
+        grade23: 0, grade0: 0, canContinue: false }],
       candidates: [{ key: 'c0', matchedQueries: ['测试'], title: '', publishedAt: '2026-09-17', section: '公开板块', replyCount: 2 }],
     }, expect.any(AbortSignal));
   });

@@ -157,6 +157,7 @@ export interface FeedbackSearch {
   purpose: string;
   basis?: FeedbackSearchBasis;
   supportKeys?: string[];
+  clueOnly?: boolean;
 }
 
 export interface FeedbackPlan {
@@ -188,12 +189,28 @@ export type StoredExtensionSettings = Partial<ExtensionSettings> & { intentFilte
 
 export interface FeedbackRequestInput {
   query: string;
+  remainingRequests?: number;
   executedSearches: { query: string; hitCount: number }[];
+  searchLedger?: SearchLedgerEntry[];
   candidates: FeedbackCandidate[];
+}
+
+export interface SearchLedgerEntry {
+  query: string;
+  pages: number;
+  hits: number;
+  uniqueCandidates: number;
+  newOnLastPage: number;
+  grade23: number;
+  grade0: number;
+  canContinue: boolean;
 }
 
 export interface FinalRerankCandidate extends FeedbackEvidence {
   key: string;
+  matchedQueries: string[];
+  independentQueryCount: number;
+  bestSourcePosition: number | null;
 }
 
 export interface FinalRerankRequestInput {

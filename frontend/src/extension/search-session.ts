@@ -13,6 +13,7 @@ import {
   type ModelQueryPlan,
   type PlannedSearch,
   type RetrievedCandidate,
+  type SearchLedgerEntry,
   type SearchSourceSession,
   type TopicCandidate,
 } from './types';
@@ -225,7 +226,9 @@ export class SearchSession {
     const enforceTimeRange = hasExplicitTimeConstraint(normalizedQuery);
     const timeOrderedSource = this.source.capabilities.resultOrdering === 'time-desc';
     const candidates = new Map<string, RetrievedCandidate>();
-    const executed = new Map<string, { query: string; hitCount: number }>();
+    const executed = new Map<string, {
+      query: string; hitCount: number; pages: number; candidateIds: Set<string>; newOnLastPage: number;
+    }>();
     const inactive = new Set<string>();
     let round = 1;
     let temporaryKeySequence = 0;
@@ -332,6 +335,21 @@ export class SearchSession {
           .join('|') || 'none';
       };
       const requestLimitStatus = () => `已达到 ${maxRequests} 次站点检索请求上限，保留当前部分结果。`;
+      const searchLedger = (): SearchLedgerEntry[] => [...executed].map(([key, branch]) => {
+        const branchCandidates = [...branch.candidateIds]
+          .map((id) => candidates.get(id))
+          .filter((entry): entry is RetrievedCandidate => Boolean(entry));
+        return {
+          query: branch.query,
+          pages: branch.pages,
+          hits: branch.hitCount,
+          uniqueCandidates: branch.candidateIds.size,
+          newOnLastPage: branch.newOnLastPage,
+          grade23: branchCandidates.filter((entry) => entry.relevanceGrade === 2 || entry.relevanceGrade === 3).length,
+          grade0: branchCandidates.filter((entry) => entry.relevanceGrade === 0).length,
+          canContinue: continuations.has(key),
+        };
+      });
 
       while (true) {
         if (this.requestedStop) return this.finish(this.requestedStop, runContext());
@@ -386,7 +404,17 @@ export class SearchSession {
           );
           if (this.requestedStop) return this.finish(this.requestedStop, runContext());
           const previous = executed.get(searchKey);
-          executed.set(searchKey, { query: current.search.query, hitCount: (previous?.hitCount ?? 0) + page.hits.length });
+          const pageCandidateIds = new Set(page.hits.map((hit) => hit.candidate.id.trim()).filter(Boolean));
+          const branchCandidateIds = previous?.candidateIds ?? new Set<string>();
+          pageCandidateIds.forEach((id) => branchCandidateIds.add(id));
+          const globallyNewIds = [...pageCandidateIds].filter((id) => !candidates.has(id));
+          executed.set(searchKey, {
+            query: current.search.query,
+            hitCount: (previous?.hitCount ?? 0) + page.hits.length,
+            pages: (previous?.pages ?? 0) + 1,
+            candidateIds: branchCandidateIds,
+            newOnLastPage: globallyNewIds.length,
+          });
           if ((executed.get(searchKey)?.hitCount ?? 0) === 0) inactive.add(current.search.query);
           else inactive.delete(current.search.query);
           mergeHits(candidates, page.hits, current.search.query, round, () => `c${temporaryKeySequence++}`);
@@ -432,11 +460,18 @@ export class SearchSession {
             ? `正在判断第 ${round} 个检索波次的候选证据…`
             : '当前没有正信号，正在请求一次查询救援…',
         });
-        const feedback = await waitForAbortable(this.planner.planFeedback(createFeedbackInput({
+        const feedbackInput = createFeedbackInput({
           query: normalizedQuery,
-          executedSearches: [...executed.values()],
+          remainingRequests: Math.max(0, maxRequests - this.snapshot.requestsMade),
+          executedSearches: [...executed.values()].map(({ query: executedQuery, hitCount }) => ({ query: executedQuery, hitCount })),
+          searchLedger: searchLedger(),
           candidates: selected.candidates,
-        }), this.controller.signal), this.controller.signal, '反馈调用已终止');
+        });
+        const feedback = await waitForAbortable(
+          this.planner.planFeedback(feedbackInput, this.controller.signal),
+          this.controller.signal,
+          '反馈调用已终止',
+        );
         if (this.requestedStop) return this.finish(this.requestedStop, runContext());
         applyFeedbackJudgments(selected.entries, feedback.judgments);
         feedback.stopSuggestions.forEach((suggestion) => {
@@ -452,20 +487,21 @@ export class SearchSession {
         });
         const signalAfterFeedback = feedbackSignal(judgedView);
         const signatureAfterFeedback = rescueSignature(judgedView);
-        const positiveJudgmentKeys = new Set(feedback.judgments
-          .filter((judgment) => judgment.grade === 2 || judgment.grade === 3)
-          .map((judgment) => judgment.key));
+        const judgmentByKey = new Map(feedback.judgments.map((judgment) => [judgment.key, judgment.grade]));
+        const feedbackCandidateKeys = new Set(feedbackInput.candidates.map((candidate) => candidate.key));
         const nativeTitleKeys = new Set(selected.entries
-          .filter((entry) => entry.candidate.titleOrigin === 'native' && entry.candidate.title.trim())
+          .filter((entry) => feedbackCandidateKeys.has(entry.temporaryKey!)
+            && entry.candidate.titleOrigin === 'native' && entry.candidate.title.trim())
           .map((entry) => entry.temporaryKey));
         let justEnqueued = 0;
         if (!expansionClosed) {
           const evidenceSearches = feedback.newSearches.filter((search) => {
             const supportKeys = [...new Set(search.supportKeys ?? [])];
-            return search.basis === 'evidence'
-              && supportKeys.length >= 1
-              && supportKeys.length <= 3
-              && supportKeys.every((key) => positiveJudgmentKeys.has(key) && nativeTitleKeys.has(key));
+            if (search.basis !== 'evidence' || supportKeys.length < 1 || supportKeys.length > 3
+              || supportKeys.some((key) => !nativeTitleKeys.has(key) || !judgmentByKey.has(key))) return false;
+            const grades = supportKeys.map((key) => judgmentByKey.get(key)!);
+            if (grades.some((grade) => grade === 0)) return false;
+            return grades.some((grade) => grade === 2 || grade === 3) || search.clueOnly === true;
           });
           justEnqueued += enqueueFirstPages(evidenceSearches, true);
           const mayRescue = !rescueUsed && signalAfterFeedback !== 'positive';

@@ -1,5 +1,5 @@
 import { modelMetadata, modelMetadataPayload } from './model-metadata';
-import { normalizeText } from './text';
+import { folded, normalizeText } from './text';
 import type {
   FinalRerankCandidate,
   FinalRerankPlan,
@@ -12,6 +12,39 @@ export interface FinalRerankSelection {
   input: FinalRerankRequestInput;
   keyToId: Map<string, string>;
   removableKeys: Set<string>;
+}
+
+function serializedMatchedQueries(queries: string[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of queries) {
+    const query = normalizeText(raw).slice(0, 120);
+    const key = folded(query);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(query);
+    if (result.length >= 5) break;
+  }
+  return result;
+}
+
+function retrievalFacts(entry: RetrievedCandidate): Pick<FinalRerankCandidate, 'matchedQueries' | 'independentQueryCount' | 'bestSourcePosition'> {
+  const matchedQueries: string[] = [];
+  const seen = new Set<string>();
+  let bestSourcePosition: number | null = null;
+  for (const observation of entry.observations) {
+    const query = normalizeText(observation.query);
+    const queryKey = folded(query);
+    if (queryKey && !seen.has(queryKey)) {
+      seen.add(queryKey);
+      if (matchedQueries.length < 5) matchedQueries.push(query);
+    }
+    const position = observation.position;
+    if (position !== undefined && Number.isFinite(position) && position >= 1) {
+      bestSourcePosition = bestSourcePosition === null ? position : Math.min(bestSourcePosition, position);
+    }
+  }
+  return { matchedQueries, independentQueryCount: seen.size, bestSourcePosition };
 }
 
 export function createFinalRerankSelection(
@@ -29,6 +62,7 @@ export function createFinalRerankSelection(
   const candidates: FinalRerankCandidate[] = selected.map((entry) => ({
     key: entry.temporaryKey!,
     ...modelMetadata(entry.candidate),
+    ...retrievalFacts(entry),
   }));
   return {
     input: { query: normalizeText(query).slice(0, 500), candidates },
@@ -46,6 +80,13 @@ export function buildFinalRerankPayload(input: FinalRerankRequestInput) {
     candidates: input.candidates.map((candidate) => ({
       key: candidate.key.slice(0, 40),
       ...modelMetadataPayload(candidate),
+      matched_queries: serializedMatchedQueries(candidate.matchedQueries),
+      independent_query_count: Math.max(0, Math.floor(candidate.independentQueryCount)),
+      best_source_position: candidate.bestSourcePosition !== null
+        && Number.isFinite(candidate.bestSourcePosition)
+        && candidate.bestSourcePosition >= 1
+        ? candidate.bestSourcePosition
+        : null,
     })),
   };
 }

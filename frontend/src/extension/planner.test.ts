@@ -16,13 +16,18 @@ describe('PlannerClient', () => {
 
     await expect(client.rerankResults({
       query: '资料',
-      candidates: [{ key: 'c0', title: '高数资料' }, { key: 'c1', title: '微积分资料' }],
+      candidates: [
+        { key: 'c0', title: '高数资料', matchedQueries: [], independentQueryCount: 0, bestSourcePosition: null },
+        { key: 'c1', title: '微积分资料', matchedQueries: [], independentQueryCount: 0, bestSourcePosition: null },
+      ],
     })).resolves.toEqual({ orderedKeys: ['c1'], removeKeys: ['c0'] });
     expect(wirePayload).toEqual({
       query: '资料',
       candidates: [
-        { key: 'c0', title: '高数资料', board: '', time: '', reply_count: 0 },
-        { key: 'c1', title: '微积分资料', board: '', time: '', reply_count: 0 },
+        { key: 'c0', title: '高数资料', board: '', time: '', reply_count: 0,
+          matched_queries: [], independent_query_count: 0, best_source_position: null },
+        { key: 'c1', title: '微积分资料', board: '', time: '', reply_count: 0,
+          matched_queries: [], independent_query_count: 0, best_source_position: null },
       ],
     });
   });
@@ -31,7 +36,9 @@ describe('PlannerClient', () => {
     {}, [], { reasoning: 'unknown' }, { ordered_keys: 'c0' }, { remove_keys: [1] },
   ])('拒绝无法识别的最终列表重排响应：%j', async (response) => {
     const client = new PlannerClient({ chatCompletions: async () => JSON.stringify(response) }, DEFAULT_SETTINGS, capabilities);
-    await expect(client.rerankResults({ query: '资料', candidates: [{ key: 'c0', title: '资料' }] })).rejects.toThrow('最终列表重排');
+    await expect(client.rerankResults({ query: '资料', candidates: [{
+      key: 'c0', title: '资料', matchedQueries: [], independentQueryCount: 0, bestSourcePosition: null,
+    }] })).rejects.toThrow('最终列表重排');
   });
 
   it.each([

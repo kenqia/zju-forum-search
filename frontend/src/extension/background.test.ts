@@ -191,7 +191,10 @@ describe('background message boundary', () => {
     await expect(send({
       type: 'planner:rerank', capabilities: { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' },
       requestId: 'rerank-1',
-      input: { query: '高数', candidates: [{ key: 'c0', title: '高数' }, { key: 'c1', title: '微积分' }] },
+      input: { query: '高数', candidates: [
+        { key: 'c0', title: '高数', matchedQueries: ['高数'], independentQueryCount: 1, bestSourcePosition: 1 },
+        { key: 'c1', title: '微积分', matchedQueries: ['微积分'], independentQueryCount: 1, bestSourcePosition: 2 },
+      ] },
     })).resolves.toEqual({ ok: true, rerank: { orderedKeys: ['c1', 'c0'], removeKeys: [] } });
 
     const [, init] = (dependencies.fetch as ReturnType<typeof vi.fn>).mock.calls[0];

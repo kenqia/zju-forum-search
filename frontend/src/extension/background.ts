@@ -64,6 +64,14 @@ function isFinalRerankInput(value: unknown): value is import('./types').FinalRer
     const item = candidate as Record<string, unknown>;
     return typeof item.key === 'string' && Boolean(item.key)
       && typeof item.title === 'string'
+      && Array.isArray(item.matchedQueries)
+      && item.matchedQueries.length <= 5
+      && item.matchedQueries.every((query) => typeof query === 'string')
+      && typeof item.independentQueryCount === 'number'
+      && Number.isInteger(item.independentQueryCount)
+      && item.independentQueryCount >= 0
+      && (item.bestSourcePosition === null
+        || (typeof item.bestSourcePosition === 'number' && Number.isFinite(item.bestSourcePosition) && item.bestSourcePosition >= 1))
       && (item.publishedAt === undefined || typeof item.publishedAt === 'string')
       && (item.section === undefined || typeof item.section === 'string')
       && (item.replyCount === undefined || (typeof item.replyCount === 'number' && Number.isFinite(item.replyCount)));

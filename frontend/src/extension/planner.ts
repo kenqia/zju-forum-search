@@ -161,7 +161,9 @@ function searchList(values: unknown): PlannedSearch[] {
   );
 }
 
-function feedbackSearchList(values: unknown, positiveKeys: Set<string>): FeedbackSearch[] {
+function feedbackSearchList(
+  values: unknown, judgments: Map<string, 0 | 1 | 2 | 3>, evidenceKeys: Set<string>,
+): FeedbackSearch[] {
   const searches: FeedbackSearch[] = [];
   for (const item of Array.isArray(values) ? values : []) {
     if (!isRecord(item)) continue;
@@ -180,8 +182,14 @@ function feedbackSearchList(values: unknown, positiveKeys: Set<string>): Feedbac
       if (!supportKeys.length) searches.push({ query, purpose, basis, supportKeys });
       continue;
     }
-    if (supportKeys.length < 1 || supportKeys.length > 3 || supportKeys.some((key) => !positiveKeys.has(key))) continue;
-    searches.push({ query, purpose, basis, supportKeys });
+    if (supportKeys.length < 1 || supportKeys.length > 3
+      || supportKeys.some((key) => !evidenceKeys.has(key) || !judgments.has(key))) continue;
+    const grades = supportKeys.map((key) => judgments.get(key)!);
+    if (grades.some((grade) => grade === 0)) continue;
+    const hasStrongSupport = grades.some((grade) => grade === 2 || grade === 3);
+    const clueOnly = !hasStrongSupport && item.clue_only === true;
+    if (!hasStrongSupport && !clueOnly) continue;
+    searches.push({ query, purpose, basis, supportKeys, clueOnly });
   }
   return uniqueBy(searches, (search) => folded(search.query));
 }
@@ -225,12 +233,9 @@ export function normalizeFeedbackPlan(raw: unknown, validKeys?: Set<string>, evi
         && (item.grade === 0 || item.grade === 1 || item.grade === 2 || item.grade === 3)) judgments.set(key, item.grade);
     }
   }
-  const positiveKeys = new Set([...judgments]
-    .filter(([key, grade]) => (grade === 2 || grade === 3) && evidenceKeys.has(key))
-    .map(([key]) => key));
   return {
     judgments: [...judgments].map(([key, grade]) => ({ key, grade })),
-    newSearches: feedbackSearchList(source.new_searches, positiveKeys),
+    newSearches: feedbackSearchList(source.new_searches, judgments, evidenceKeys),
     stopSuggestions: textList(source.stop_suggestions),
     shouldStop: source.should_stop === true,
     reasoning: normalizeText(source.reasoning),
@@ -333,15 +338,16 @@ ${sourceInstructions(capabilities)}
 - 给每个能判断的候选返回 0、1、2 或 3：3 明确高度相关，2 大概率相关，1 信息不足、部分相关或不确定，0 明确无关。拿不准时用 1。
 - candidates 可以为空。没有候选或当前没有 grade 2/3 时，可以仅根据原始查询提出 query 依据的救援检索词，用同义语、上位词、缩短表达或概念拆分放宽召回。
 - 只追加新检索词或建议停用已执行且累计零命中的词；不得修改首轮确定的必须概念、排除词、时间约束。
-- 每条新检索词必须声明 basis。query 表示只根据原始查询放宽表达，support_keys 必须为空。evidence 表示从本轮候选的原生标题学习，必须提供 1 至 3 个去重 support_keys，且每个键都在本响应中获得 grade 2 或 grade 3。
+- 每条新检索词必须声明 basis。query 表示只根据原始查询放宽表达，support_keys 必须为空。evidence 表示从本轮候选的原生标题学习，必须提供 1 至 3 个去重 support_keys。支持集合只含 grade 1 时必须声明 clue_only: true；支持集合中有 grade 2/3 时按普通 evidence 扩展处理，即使同时包含 grade 1。grade 0 不能提供支持。
 - evidence 检索词只能从支持候选的原生标题学习。板块可以帮助判断相关性，但不能作为新检索词的词汇来源。回复数不能单独提高 grade，也不能作为新检索词的词汇来源。
+- clue_only 只声明 grade 1 候选提供下一跳线索。本地只核对支持关系、当前 grade 和原生标题可见性，不做标题子串、词元重叠或语义相似度校验。
 - should_stop 只建议关闭后续扩展，不会取消已入队首页或已知分页。若候选已饱和或不必再产生扩展词，返回 should_stop: true。
 - 不要重复已执行过的检索词。
 
 返回 JSON：
 {
   "judgments": [{"key": "候选临时键", "grade": 0}],
-  "new_searches": [{"query": "下一轮检索词", "purpose": "补足什么", "basis": "query | evidence", "support_keys": ["证据候选临时键"]}],
+  "new_searches": [{"query": "下一轮检索词", "purpose": "补足什么", "basis": "query | evidence", "support_keys": ["证据候选临时键"], "clue_only": false}],
   "stop_suggestions": ["建议停用的已执行检索词"],
   "should_stop": false,
   "reasoning": "一句话说明判断"
@@ -349,8 +355,8 @@ ${sourceInstructions(capabilities)}
 }
 
 export function finalRerankSystemPrompt(): string {
-  return `你是搜索结果的最终列表重排器。输入是用户的原始查询和一个小规模候选列表，其中只有运行内临时键和白名单元数据（原生标题、发布时间、板块、回复数）。
-按查询意图返回候选的相对顺序，并只建议移除明确无关的候选。板块可以帮助判断查询意图。回复数只能在其他相关性信号接近时作为弱破同分信号，不能单独提高相关性。正文、回帖、命中片段、等级、检索支持、平台 ID、URL、来源位次和轮次都不会提供；正文派生标题为空时只能依据其他元数据判断，不得推测正文。拿不准时保留。不要改写临时键。
+  return `你是搜索结果的最终列表重排器。输入是用户的原始查询和一个小规模候选列表，其中只有运行内临时键、白名单元数据（原生标题、发布时间、板块、回复数）和检索事实（最多五个首见命中检索词、完整独立检索词数量、最佳来源位次）。
+按查询意图返回候选的相对顺序，并只建议移除明确无关的候选。板块可以帮助判断查询意图。回复数只能在其他相关性信号接近时作为弱破同分信号，不能单独提高相关性。正文、回帖、命中片段、相关性等级、平台 ID、URL 和轮次都不会提供；正文派生标题为空时只能依据其他元数据和检索事实判断，不得推测正文。拿不准时保留。不要改写临时键。
 
 返回 JSON：
 { "ordered_keys": ["按相关性排列的候选临时键"], "remove_keys": ["明确建议移除的候选临时键"] }`;

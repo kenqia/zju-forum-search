@@ -51,15 +51,19 @@ describe('最终列表重排', () => {
     expect(selection?.input).toEqual({
       query: '找资料',
       candidates: [
-        { key: 'c-duo', title: '', section: 'board', publishedAt: '2026-09-20', replyCount: 3 },
-        { key: 'c-judged', title: 'title-judged', section: 'board', publishedAt: '2026-09-20', replyCount: 3 },
+        { key: 'c-duo', title: '', section: 'board', publishedAt: '2026-09-20', replyCount: 3,
+          matchedQueries: [], independentQueryCount: 0, bestSourcePosition: null },
+        { key: 'c-judged', title: 'title-judged', section: 'board', publishedAt: '2026-09-20', replyCount: 3,
+          matchedQueries: [], independentQueryCount: 0, bestSourcePosition: null },
       ],
     });
     expect(buildFinalRerankPayload(selection!.input)).toEqual({
       query: '找资料',
       candidates: [
-        { key: 'c-duo', title: '', board: 'board', time: '2026-09-20', reply_count: 3 },
-        { key: 'c-judged', title: 'title-judged', board: 'board', time: '2026-09-20', reply_count: 3 },
+        { key: 'c-duo', title: '', board: 'board', time: '2026-09-20', reply_count: 3,
+          matched_queries: [], independent_query_count: 0, best_source_position: null },
+        { key: 'c-judged', title: 'title-judged', board: 'board', time: '2026-09-20', reply_count: 3,
+          matched_queries: [], independent_query_count: 0, best_source_position: null },
       ],
     });
     expect(JSON.stringify(buildFinalRerankPayload(selection!.input))).not.toMatch(/grade|sourceId|url|observations|documents/u);
