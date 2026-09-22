@@ -184,11 +184,10 @@ finish() {
 # Replace the example below. Set TOTAL_STAGES to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=5
+TOTAL_STAGES=6
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
-FRONTEND_DIR="$PROJECT_ROOT/frontend"
+FRONTEND_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
 run_tests() {
   (cd "$FRONTEND_DIR" && npm test -- "$@")
@@ -196,57 +195,105 @@ run_tests() {
 
 require_yes() {
   if ! confirm "$1"; then
-    warn "此阶段尚未通过。请记录现象，修复后重新运行向导。"
+    warn "本阶段尚未通过。请记录现象，修复后重新运行向导。"
     exit 1
   fi
 }
 
-banner "Issue #9 有界迭代搜索验收"
+assert_absent() {
+  local pattern="$1"
+  shift
+  if grep -nF -- "$pattern" "$@"; then
+    warn "发现已要求删除的生产接口：$pattern"
+    exit 1
+  fi
+}
 
-stage "构建与全量自动回归"
-say "本向导不会读取或写入模型 key、CC98 登录态、正文、回帖或认证数据。"
-say "它不会创建 .env、不会修改扩展设置、不会写入 GitHub。"
-step "构建扩展，并运行完整前端测试集。"
-(cd "$FRONTEND_DIR" && npm run build && npm test)
-say "✓ 生产构建与全量测试通过。"
+banner "Issue #31 无正信号救援与 CC98 分页排空验收"
 
-stage "确定性 mock：迭代、分页、排序与停止条件"
-say "以下测试使用 mock 模型序列和 mock CC98 响应；不会访问真实 CC98 或模型端点。"
-step "运行 SearchSession、排序、规划器与 CC98 adapter 的定向测试。"
+say "本向导不会读取或写入 API key、Cookie、CC98 token、Authorization、浏览器存储或帖子内容。"
+say "精确边界由 mock 测试验收；真实站点阶段只做一次普通搜索，不人为制造限流、空页或大量请求。"
+pause "确认可以运行本地检查，并使用本人已登录的 CC98 会话后按 Enter。"
+
+stage "完整自动回归与扩展产物"
+say "运行完整前端测试、TypeScript 检查、生产构建和扩展产物校验。"
+(cd "$FRONTEND_DIR" && npm test && npm run typecheck && npm run build)
+say "✓ 完整测试、类型检查、Vite 构建和 verify:dist 均已通过。"
+require_yes "完整自动回归是否全部通过？"
+
+stage "反馈信号与统一救援"
+say "以下测试只使用 mock 模型和 mock 搜索源，不访问真实 CC98 或模型端点。"
 run_tests --reporter=verbose \
-  src/extension/search-session.test.ts \
-  src/extension/ranking.test.ts \
+  src/extension/issue-31.test.ts \
+  src/extension/issue-30.test.ts \
   src/extension/planner.test.ts \
-  src/extension/sites/cc98/index.test.ts
-say "已覆盖：首轮→反馈多轮、轮内广度优先分页、20 条/页、2 秒间隔、30 次硬上限、无正信号救援、停止门、中文停止文案和最终词典序重排。"
-say "隐私断言还会验证：反馈负载排除正文、回帖和认证数据，仅保留白名单元数据并限制标题与整轮大小。"
-pause "阅读通过的测试名称后按 Enter"
+  src/extension/background.test.ts \
+  src/extension/content.test.tsx
+assert_absent "planBlindExpansion" \
+  "$FRONTEND_DIR/src/extension/planner.ts" \
+  "$FRONTEND_DIR/src/extension/search-session.ts" \
+  "$FRONTEND_DIR/src/extension/content.tsx"
+assert_absent "planner:blind" \
+  "$FRONTEND_DIR/src/extension/background.ts" \
+  "$FRONTEND_DIR/src/extension/content.tsx" \
+  "$FRONTEND_DIR/src/extension/types.ts"
+say "已验证："
+step "信号从全部时间范围内候选派生 none、weak、positive；旧批次正信号仍有效，重判后可回到 weak。"
+step "空候选和 grade 0/1 弱信号统一进入 Feedback，并且只有合法、首见、无 support_keys 的 query 搜索入队才消耗救援。"
+step "重复、空白、非法或已执行 query 不消耗救援；同一失败输入没有新证据时不重复调用模型；每次运行最多一次救援。"
+step "独立盲扩展方法、消息类型和运行分支已从生产代码删除。"
+require_yes "反馈信号、统一救援和盲扩展删除证据是否通过？"
 
-stage "Edge：逐轮进度与结果卡片"
+stage "请求预留与停止门"
+say "继续使用确定性 mock 轨迹验证请求调度和停止语义。"
+run_tests --reporter=verbose \
+  src/extension/issue-31.test.ts \
+  src/extension/issue-25.test.ts \
+  src/extension/search-session.test.ts
+say "已验证："
+step "请求上限至少为 3 时先执行 anchor 和非 anchor，并为无正信号救援预留一次请求；positive 或救援不再需要时释放预留。"
+step "上限为 1 或 2 时没有隐藏请求或超额请求，所有首页和分页共享同一个请求计数。"
+step "合法新检索词先规范化、校验和入队，再判断 should_stop；救援仍有资格、首页待执行或刚入队首见词时拒绝停止建议。"
+step "停止建议一旦接受，只永久关闭后续扩展；已入队首页和 continuation 继续，后续新证据仍进入 Feedback 并更新 grade 和软隔离。"
+step "只有扩展关闭且已知分页排空才报告 model_stop；分页未耗尽而撞上上限时报告 request_limit 和部分结果。"
+require_yes "请求预留、停止门和关闭后反馈轨迹是否通过？"
+
+stage "CC98 分页与既有保护"
+say "此阶段验证 adapter 的原始响应分页，以及搜索 core 的既有停止保护。"
+run_tests --reporter=verbose \
+  src/extension/sites/cc98/index.test.ts \
+  src/extension/search-session.test.ts \
+  src/extension/issue-25.test.ts \
+  src/extension/sites/duo/integration.test.ts \
+  src/extension/ranking.test.ts \
+  src/extension/final-reranking.test.ts
+say "已验证："
+step "CC98 始终发送 size=20；满 20 条和非空短页都产生下一 offset，空页终止分页。"
+step "offset 按原始响应长度推进，单条解析失败不会造成重叠或跳位。"
+step "多个 continuation 保持广度优先，新接受的检索词优先取得首页。"
+step "游标循环保护、请求间隔、时间提前停止、模型失败保留候选和共享请求上限保持有效。"
+step "grade 1 与未判断候选保留；grade 0 软隔离和最终重排删除保护没有放宽。"
+require_yes "CC98 分页和既有保护的自动证据是否通过？"
+
+stage "Edge 真实会话烟雾验收"
 open_url "edge://extensions"
-step "在 Edge 重载本扩展。"
+step "启用开发人员模式并重载本扩展；如尚未加载，选择目录：$FRONTEND_DIR/dist"
 open_url "https://www.cc98.org/"
-step "确认已登录 CC98，并刷新页面。"
-step "打开 98 悬浮球；在“模型设置”确认已经恢复可用的真实 base URL、模型名称和 API key。不要在终端粘贴或展示 key。"
-step "切到“搜索”，输入一个预期能命中的自然语言查询并开始搜索。"
-step "展开“检索进度”：确认显示当前轮次、正在执行/已执行检索词；反馈后可显示已停用词和学到的扩展词。"
-step "每轮完成后检查结果增量出现：卡片只显示标题、板块、发布时间、回复数和“首次命中第 N 轮”，不显示内部得分。"
-step "点击任一标题，确认原帖在新标签页打开。"
-require_yes "以上逐轮 UI 与结果卡片是否符合预期？"
+step "确认已登录 CC98，刷新页面并打开右下角“搜”悬浮球。"
+step "在模型设置中确认现有 base URL、模型名称和 API key 可用；不要复制、展示或修改 API key。"
+step "记下当前站点请求次数上限。如需缩短烟雾验收，可临时设为 3，但不要用真实站点制造 30 次请求、限流或异常响应。"
+step "提交一条不含个人信息、预期能命中普通主题帖的查询。展开检索进度，观察轮次、已执行检索词和请求次数。"
+step "确认结果逐轮保留；若出现“模型已关闭后续扩展”，状态必须同时说明已完成已知分页。"
+step "若达到请求上限，状态必须说明保留当前部分结果，不能表示模型认为结果已经足够。"
+note "零候选、弱信号救援、短页、空页和关闭后的 Feedback 不要求在真实站点强行制造，以前四阶段的 mock 轨迹为准。"
+require_yes "真实会话的进度、结果保留和终止文案是否符合预期？"
 
-stage "Edge：关闭、停止与新查询"
-step "在一轮仍进行时关闭抽屉，等待至少一次 CC98 请求间隔（约 2 秒），再重新打开。"
-step "确认轮次、请求数或结果仍在推进：关闭抽屉不应终止搜索。"
-step "点击“停止并查看结果”，确认已有卡片保留，且状态显示对应中文停止原因。"
-step "重新开始一个查询；在其仍运行时输入另一条查询并点击“开始新搜索”。确认界面开始展示新查询的进度，而旧查询不再继续更新。"
-require_yes "关闭、停止和新查询替换行为是否符合预期？"
-
-stage "数据边界与验收记录"
-say "不要在 DevTools 展开、复制或截图任何 Authorization 请求头，也不要查看 CC98 token。"
-step "复核结果卡片：不应展示内部排序分、模型理由、正文、回帖或认证数据。"
-step "复核进度区：未命中检索词仅来自已执行且累计零命中的词；首轮全空时应通过 Feedback 请求一次查询救援，仍空后显示“没有找到主题帖”。"
-step "如需验证预算或 30 次上限，请以第 2 阶段的 mock 测试结果为准；真实站点不应人为制造 30 次请求。"
-require_yes "数据边界、停止文案与结果呈现均已核对？"
-say "✓ #9 的自动确定性验收和 Edge 交互验收均已完成。"
+stage "恢复设置与验收记录"
+say "不要在验收记录中附加 API key、Cookie、Authorization、CC98 token、请求正文、模型响应或帖子内容。"
+step "如果上一阶段临时修改过站点请求次数上限，现在恢复原值并保存。"
+step "确认自动阶段均通过，真实会话没有出现隐藏请求、超额请求、结果丢失或错误的完整结果文案。"
+step "只记录 Issue #31 通过或未通过，以及非敏感的失败步骤名称。"
+require_yes "设置已恢复，并已完成 Issue #31 的自动与人工验收？"
+say "✓ Issue #31 验收完成。"
 
 finish

@@ -186,67 +186,68 @@ finish() {
 
 TOTAL_STAGES=5
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
-FRONTEND_DIR="$PROJECT_ROOT/frontend"
-
-run_tests() {
-  (cd "$FRONTEND_DIR" && npm test -- "$@")
-}
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+FRONTEND_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+REPO_DIR=$(cd "$FRONTEND_DIR/.." && pwd)
 
 require_yes() {
   if ! confirm "$1"; then
-    warn "此阶段尚未通过。请记录现象，修复后重新运行向导。"
+    warn "本阶段未通过。验收在这里停止，不记录为通过。"
     exit 1
   fi
 }
 
-banner "Issue #9 有界迭代搜索验收"
+banner "Issue #30 查询组合、可验证扩展与模型元数据边界验收"
 
-stage "构建与全量自动回归"
-say "本向导不会读取或写入模型 key、CC98 登录态、正文、回帖或认证数据。"
-say "它不会创建 .env、不会修改扩展设置、不会写入 GitHub。"
-step "构建扩展，并运行完整前端测试集。"
-(cd "$FRONTEND_DIR" && npm run build && npm test)
-say "✓ 生产构建与全量测试通过。"
+say "本向导不读取浏览器存储，也不保存 API key、Cookie、登录态、帖子内容、请求内容或模型响应。"
+say "协议归一化、请求顺序、扩展授权、局部失败隔离、排序稳定性与失败回退由自动测试验收；人工阶段只检查页面和本地请求中能稳定观察的边界。"
+warn "不要复制、截图或展示 DevTools 中的 Authorization、Cookie、请求正文、帖子内容或模型响应。"
+pause "确认可以运行本地检查，并使用本人已登录的 CC98 会话后按 Enter。"
 
-stage "确定性 mock：迭代、分页、排序与停止条件"
-say "以下测试使用 mock 模型序列和 mock CC98 响应；不会访问真实 CC98 或模型端点。"
-step "运行 SearchSession、排序、规划器与 CC98 adapter 的定向测试。"
-run_tests --reporter=verbose \
-  src/extension/search-session.test.ts \
-  src/extension/ranking.test.ts \
-  src/extension/planner.test.ts \
-  src/extension/sites/cc98/index.test.ts
-say "已覆盖：首轮→反馈多轮、轮内广度优先分页、20 条/页、2 秒间隔、30 次硬上限、无正信号救援、停止门、中文停止文案和最终词典序重排。"
-say "隐私断言还会验证：反馈负载排除正文、回帖和认证数据，仅保留白名单元数据并限制标题与整轮大小。"
-pause "阅读通过的测试名称后按 Enter"
+stage "运行自动验收证据"
+say "即将运行完整前端测试、类型检查、生产构建和扩展产物检查。"
+(cd "$FRONTEND_DIR" && npm test && npm run typecheck && npm run build)
+grep -F '查询组合不完整，仍将执行现有检索词。' "$FRONTEND_DIR/src/extension/search-session.ts" >/dev/null
+grep -F '作者只在本地结果卡片显示，不会发送给模型。' "$FRONTEND_DIR/src/extension/content.tsx" >/dev/null
+say "自动检查已验证以下行为："
+step "首轮角色 precise、balanced、anchor 的归一化；标题来源的 anchor 组合、预算优先级和组合不完整降级。"
+step "query 与 evidence 扩展的协议、support_keys 授权、标题来源限制、逐项隔离及 stop_suggestions 的已执行零命中限制。"
+step "作者不进入反馈或最终重排序模型负载；仅作者变化不增加模型可见的独立证据版本，且本地卡片仍保留作者。"
+step "板块和回复数的提示词边界、回复数不参与本地预排序，以及模型超时、网络失败和无效响应的本地回退。"
+step "现有搜索运行、模型协议和 wire payload 接缝覆盖上述行为，未新增测试专用生产接口。"
+require_yes "完整测试、类型检查、构建、产物检查和文档断言均已通过？"
 
-stage "Edge：逐轮进度与结果卡片"
-open_url "edge://extensions"
-step "在 Edge 重载本扩展。"
+stage "重载扩展并保留现有设置"
+say "在 Edge 打开 edge://extensions，启用开发人员模式，然后重载已加载的扩展。"
+say "如果尚未加载，请点击“加载解压缩的扩展”，选择下面的目录："
+say "$FRONTEND_DIR/dist"
 open_url "https://www.cc98.org/"
-step "确认已登录 CC98，并刷新页面。"
-step "打开 98 悬浮球；在“模型设置”确认已经恢复可用的真实 base URL、模型名称和 API key。不要在终端粘贴或展示 key。"
-step "切到“搜索”，输入一个预期能命中的自然语言查询并开始搜索。"
-step "展开“检索进度”：确认显示当前轮次、正在执行/已执行检索词；反馈后可显示已停用词和学到的扩展词。"
-step "每轮完成后检查结果增量出现：卡片只显示标题、板块、发布时间、回复数和“首次命中第 N 轮”，不显示内部得分。"
-step "点击任一标题，确认原帖在新标签页打开。"
-require_yes "以上逐轮 UI 与结果卡片是否符合预期？"
+step "刷新 CC98 页面，点击右下角“搜”悬浮球。"
+step "确认 CC98 已登录、模型设置可用。不要改动、复制或显示 API key。"
+step "如需调整请求次数上限以完成本次人工搜索，只在本地记下原值；第五阶段会恢复它。"
+require_yes "扩展已重载，CC98 和模型均可用，并已记下任何将临时修改的设置？"
 
-stage "Edge：关闭、停止与新查询"
-step "在一轮仍进行时关闭抽屉，等待至少一次 CC98 请求间隔（约 2 秒），再重新打开。"
-step "确认轮次、请求数或结果仍在推进：关闭抽屉不应终止搜索。"
-step "点击“停止并查看结果”，确认已有卡片保留，且状态显示对应中文停止原因。"
-step "重新开始一个查询；在其仍运行时输入另一条查询并点击“开始新搜索”。确认界面开始展示新查询的进度，而旧查询不再继续更新。"
-require_yes "关闭、停止和新查询替换行为是否符合预期？"
+stage "检查本地展示与隐私文案"
+say "此阶段会发送一次真实 CC98 和模型请求。请选择无敏感内容的普通检索，不要为制造边界状态反复提交。"
+step "提交一个通常会返回多条结果的查询，等待至少一条结果出现。"
+step "确认每张结果卡片仍显示作者（有作者数据时）、板块、时间和回复数。"
+step "展开或查看隐私说明，确认其明确表示作者只在本地结果卡片显示，不会发送给模型。"
+step "确认界面中没有 learned_terms 字段、标签或相关状态。"
+note "“查询组合不完整”只在模型计划恰好缺少 anchor 或非 anchor 时出现；不要为了触发它重复请求。该分支由第一阶段自动验收。"
+require_yes "作者仍在本地展示，隐私文案正确，且未出现 learned_terms？"
 
-stage "数据边界与验收记录"
-say "不要在 DevTools 展开、复制或截图任何 Authorization 请求头，也不要查看 CC98 token。"
-step "复核结果卡片：不应展示内部排序分、模型理由、正文、回帖或认证数据。"
-step "复核进度区：未命中检索词仅来自已执行且累计零命中的词；首轮全空时应通过 Feedback 请求一次查询救援，仍空后显示“没有找到主题帖”。"
-step "如需验证预算或 30 次上限，请以第 2 阶段的 mock 测试结果为准；真实站点不应人为制造 30 次请求。"
-require_yes "数据边界、停止文案与结果呈现均已核对？"
-say "✓ #9 的自动确定性验收和 Edge 交互验收均已完成。"
+stage "本地核对模型载荷的作者边界"
+say "只在自己的浏览器中检查一次请求。不要打开或复制请求头，不要记录 Authorization、Cookie、请求正文、帖子内容或模型响应。"
+step "打开 DevTools 的 Network 面板，筛选本次搜索产生的 chat/completions 请求。"
+step "仅在 Payload 的字段名层面确认反馈和最终重排请求没有 author 字段；不要读取或复制字段值。"
+step "如果本次没有触发最终重排，请不要重复搜索制造请求；以第一阶段的 final rerank wire-payload 测试为验收证据。"
+step "关闭 DevTools，避免保留或分享网络记录。"
+require_yes "已在本地确认可观察到的模型请求不含 author，且没有查看、复制或记录任何敏感数据？"
+
+stage "恢复设置并完成记录"
+step "如第二阶段临时修改过站点请求次数上限或其他模型设置，现在恢复原值并保存。"
+step "确认正常搜索仍可完成；无论模型超时、网络失败、无效 JSON 或无效顶层结构，已有候选均由第一阶段的自动测试验证会保留并回退本地逻辑。"
+step "将本次验收结论仅记录为通过或未通过；不要附带 API key、Cookie、认证头、请求正文、模型响应或帖子内容。"
+require_yes "临时设置已恢复，并已按自动与人工证据完成 Issue #30 验收？"
 
 finish

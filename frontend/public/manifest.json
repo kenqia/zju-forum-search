@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "浙大社区自然语言搜索",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "在 CC98 和朵朵校友圈页面内用自然语言迭代检索帖子。",
   "permissions": [
     "storage"
