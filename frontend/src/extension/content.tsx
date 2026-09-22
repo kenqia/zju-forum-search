@@ -35,7 +35,11 @@ function responseError(response: { ok: false; error: string; code?: ExtensionFai
 }
 
 class BackgroundPlanner implements SearchPlanner {
-  constructor(private readonly runtime: RuntimeMessenger, private readonly capabilities: SourceCapabilities) {}
+  constructor(
+    private readonly runtime: RuntimeMessenger,
+    private readonly capabilities: SourceCapabilities,
+    private readonly modelSearchNarrowingEnabled = true,
+  ) {}
   private withCancellation<T>(response: Promise<T>, requestId: string, signal?: AbortSignal): Promise<T> {
     if (!signal) return response;
     return new Promise<T>((resolve, reject) => {
@@ -61,7 +65,10 @@ class BackgroundPlanner implements SearchPlanner {
   private async requestFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const response = await this.withCancellation(this.runtime.send({ type: 'planner:feedback', requestId, input, capabilities: this.capabilities }), requestId, signal);
+    const response = await this.withCancellation(this.runtime.send({
+      type: 'planner:feedback', requestId, input, capabilities: this.capabilities,
+      modelSearchNarrowingEnabled: this.modelSearchNarrowingEnabled,
+    }), requestId, signal);
     if (!response.ok) throw responseError(response, '反馈模型调用超过 20 秒，已保留当前结果。');
     return response.feedback;
   }
@@ -83,8 +90,8 @@ class BackgroundPlanner implements SearchPlanner {
   }
 }
 
-export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities: SourceCapabilities): SearchPlanner {
-  return new BackgroundPlanner(runtime, capabilities);
+export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities: SourceCapabilities, modelSearchNarrowingEnabled = true): SearchPlanner {
+  return new BackgroundPlanner(runtime, capabilities, modelSearchNarrowingEnabled);
 }
 
 const EMPTY_SNAPSHOT: SearchSnapshot = {
@@ -132,6 +139,22 @@ function SettingsPanel({ runtime, settings, onSettings }: {
       </label>
       <label>站点检索请求次数上限
         <input type="number" min="1" max="100" value={draft.searchRequestLimit} onChange={(event) => setDraft({ ...draft, searchRequestLimit: Number(event.target.value) })} required />
+      </label>
+      <label className="toggle-setting">
+        <span className="toggle-copy">
+          <span className="toggle-title" id="model-search-narrowing-title">允许模型提前收窄搜索范围</span>
+          <span className="toggle-description" id="model-search-narrowing-description">关闭后可能发出更多站点请求，但仍受已设置的站点检索请求次数上限约束。</span>
+        </span>
+        <input
+          className="toggle-input"
+          type="checkbox"
+          role="switch"
+          aria-labelledby="model-search-narrowing-title"
+          aria-describedby="model-search-narrowing-description"
+          checked={draft.modelSearchNarrowingEnabled}
+          onChange={(event) => setDraft({ ...draft, modelSearchNarrowingEnabled: event.target.checked })}
+        />
+        <span className="toggle-control" aria-hidden="true" />
       </label>
       <label>单次反馈证据数量
         <input type="number" min="10" max="100" value={draft.feedbackEvidenceLimit} onChange={(event) => setDraft({ ...draft, feedbackEvidenceLimit: Number(event.target.value) })} required />
@@ -227,10 +250,11 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
       const source = await adapter.createSession({ url: location.href });
       if (controller.runId !== currentRun) return;
       const nextSession = new SearchSession({
-        planner: createBackgroundPlanner(runtime, source.capabilities),
+        planner: createBackgroundPlanner(runtime, source.capabilities, settings.modelSearchNarrowingEnabled),
         source,
         finalRerankEnabled: settings.finalRerankEnabled,
         finalRerankTopM: settings.finalRerankTopM,
+        modelSearchNarrowingEnabled: settings.modelSearchNarrowingEnabled,
         onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
       });
       controller.session = nextSession;

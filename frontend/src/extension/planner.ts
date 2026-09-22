@@ -354,7 +354,10 @@ ${capabilities.searchSurface === 'title' ? '标题来源的查询组合必须至
 }`;
 }
 
-export function feedbackSystemPrompt(capabilities: SourceCapabilities): string {
+export function feedbackSystemPrompt(capabilities: SourceCapabilities, modelSearchNarrowingEnabled = true): string {
+  const narrowingInstructions = modelSearchNarrowingEnabled
+    ? '- should_stop 只建议关闭后续扩展，不会取消已入队首页或已知分页。若候选已饱和或不必再产生扩展词，返回 should_stop: true。'
+    : '- 本次运行关闭了模型自动收窄：必须返回 should_stop: false 和 stop_queries: []。继续提出有价值的新检索词，但不要因为这条规则而在没有可执行任务时强行调用模型。';
   return `你是迭代检索的语义反馈规划器。
 ${sourceInstructions(capabilities)}
 你会看到本检索波次选出的候选临时键、最多三个不同检索支持，以及白名单元数据（仅原生标题、发布时间、板块、回复数）。一次完成相关性判断、下一轮检索词和停止判断。
@@ -368,7 +371,7 @@ ${sourceInstructions(capabilities)}
 - evidence 检索词只能从支持候选的原生标题学习。板块可以帮助判断相关性，但不能作为新检索词的词汇来源。回复数不能单独提高 grade，也不能作为新检索词的词汇来源。
 - clue_only 只声明 grade 1 候选提供下一跳线索。本地只核对支持关系、当前 grade 和原生标题可见性，不做标题子串、词元重叠或语义相似度校验。
 - stop_queries 逐条填写 query 和简短 reason。只能建议已执行、当前仍有 continuation 的检索词；未执行、已耗尽、空白或重复检索词不要填写。reason 只用于本地诊断，不参与执行判断，也不会进入结果卡片。
-- should_stop 只建议关闭后续扩展，不会取消已入队首页或已知分页。若候选已饱和或不必再产生扩展词，返回 should_stop: true。
+${narrowingInstructions}
 - 不要重复已执行过的检索词。
 
 返回 JSON：
@@ -392,16 +395,16 @@ export function finalRerankSystemPrompt(): string {
 export type FeedbackInput = FeedbackRequestInput;
 
 function feedbackMessagesForPayload(
-  payload: ReturnType<typeof buildFeedbackPayload>, capabilities: SourceCapabilities,
+  payload: ReturnType<typeof buildFeedbackPayload>, capabilities: SourceCapabilities, modelSearchNarrowingEnabled = true,
 ): { role: string; content: string }[] {
   return [
-    { role: 'system', content: feedbackSystemPrompt(capabilities) },
+    { role: 'system', content: feedbackSystemPrompt(capabilities, modelSearchNarrowingEnabled) },
     { role: 'user', content: JSON.stringify(payload) },
   ];
 }
 
-export function buildFeedbackMessages(input: FeedbackInput, capabilities: SourceCapabilities, currentDate?: string): { role: string; content: string }[] {
-  return feedbackMessagesForPayload(buildFeedbackPayload(input, currentDate), capabilities);
+export function buildFeedbackMessages(input: FeedbackInput, capabilities: SourceCapabilities, currentDate?: string, modelSearchNarrowingEnabled = true): { role: string; content: string }[] {
+  return feedbackMessagesForPayload(buildFeedbackPayload(input, currentDate), capabilities, modelSearchNarrowingEnabled);
 }
 
 export class PlannerClient {
@@ -427,7 +430,7 @@ export class PlannerClient {
 
   async planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
     const payload = buildFeedbackPayload(input, this.today());
-    const content = await this.transport.chatCompletions(this.settings, feedbackMessagesForPayload(payload, this.capabilities), signal);
+    const content = await this.transport.chatCompletions(this.settings, feedbackMessagesForPayload(payload, this.capabilities, this.settings.modelSearchNarrowingEnabled), signal);
     const raw = parseJson(content);
     assertFeedbackShape(raw);
     return normalizeFeedbackPlan(

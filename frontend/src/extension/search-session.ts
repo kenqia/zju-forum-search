@@ -62,6 +62,7 @@ export interface SearchSessionDependencies {
   onUpdate?: (snapshot: SearchSnapshot) => void;
   finalRerankEnabled?: boolean;
   finalRerankTopM?: number;
+  modelSearchNarrowingEnabled?: boolean;
 }
 
 export class SearchSessionError extends Error {
@@ -112,6 +113,7 @@ export class SearchSession {
   private readonly onUpdate?: (snapshot: SearchSnapshot) => void;
   private readonly finalRerankEnabled: boolean;
   private readonly finalRerankTopM: number;
+  private readonly modelSearchNarrowingEnabled: boolean;
   private controller = new AbortController();
   private rerankController: AbortController | null = null;
   private rerankCancelled = false;
@@ -129,6 +131,7 @@ export class SearchSession {
     this.onUpdate = dependencies.onUpdate;
     this.finalRerankEnabled = dependencies.finalRerankEnabled ?? true;
     this.finalRerankTopM = dependencies.finalRerankTopM ?? 30;
+    this.modelSearchNarrowingEnabled = dependencies.modelSearchNarrowingEnabled ?? true;
   }
 
   stop(reason: 'user_stopped' | 'replaced' = 'user_stopped'): void {
@@ -474,17 +477,19 @@ export class SearchSession {
         );
         if (this.requestedStop) return this.finish(this.requestedStop, runContext());
         applyFeedbackJudgments(selected.entries, feedback.judgments);
-        const stopQueries = feedback.stopQueries
-          ?? feedback.stopSuggestions.map((query) => ({ query, reason: '' }));
-        for (const suggestion of stopQueries) {
-          const stopKey = folded(normalizeText(suggestion.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT));
-          if (!stopKey) continue;
-          const matches = [...continuations].filter(([key, continuation]) => executed.has(key)
-            && folded(normalizeText(continuation.search.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT)) === stopKey);
-          if (matches.length !== 1) continue;
-          // A query stop only removes this branch's next page. It does not
-          // cancel queued first pages, consume requests, or close expansion.
-          continuations.delete(matches[0][0]);
+        if (this.modelSearchNarrowingEnabled) {
+          const stopQueries = feedback.stopQueries
+            ?? feedback.stopSuggestions.map((query) => ({ query, reason: '' }));
+          for (const suggestion of stopQueries) {
+            const stopKey = folded(normalizeText(suggestion.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT));
+            if (!stopKey) continue;
+            const matches = [...continuations].filter(([key, continuation]) => executed.has(key)
+              && folded(normalizeText(continuation.search.query).slice(0, FEEDBACK_SEARCH_QUERY_LIMIT)) === stopKey);
+            if (matches.length !== 1) continue;
+            // A query stop only removes this branch's next page. It does not
+            // cancel queued first pages, consume requests, or close expansion.
+            continuations.delete(matches[0][0]);
+          }
         }
         const judgedView = candidateView();
         this.publish({
@@ -526,7 +531,8 @@ export class SearchSession {
           reservationActive = false;
         }
         const rescueStillEligible = !expansionClosed && !rescueUsed && signalAfterFeedback !== 'positive';
-        if (feedback.shouldStop && !rescueStillEligible && !pendingFirstPages.length && justEnqueued === 0) {
+        if (this.modelSearchNarrowingEnabled && feedback.shouldStop
+          && !rescueStillEligible && !pendingFirstPages.length && justEnqueued === 0) {
           expansionClosed = true;
           reservationActive = false;
         }

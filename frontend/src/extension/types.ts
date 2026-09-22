@@ -184,6 +184,8 @@ export interface ExtensionSettings {
   searchRequestLimit: number;
   /** Maximum candidates selected for one feedback call. */
   feedbackEvidenceLimit: number;
+  /** Whether feedback may close future expansion or live query continuations. */
+  modelSearchNarrowingEnabled: boolean;
   /** Default-on final listwise reranking after a search finishes. */
   finalRerankEnabled: boolean;
   /** Number of locally presorted active candidates sent to the final rerank. */
@@ -235,7 +237,7 @@ export type ExtensionRequest =
   | { type: 'settings:get' }
   | { type: 'settings:save'; settings: Partial<ExtensionSettings> }
   | { type: 'planner:first'; requestId: string; query: string; capabilities: SourceCapabilities }
-  | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput; capabilities: SourceCapabilities }
+  | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput; capabilities: SourceCapabilities; modelSearchNarrowingEnabled?: boolean }
   | { type: 'planner:rerank'; requestId: string; input: FinalRerankRequestInput; capabilities: SourceCapabilities }
   | { type: 'planner:cancel'; requestId: string };
 
@@ -260,6 +262,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   llmModel: 'qwen3.8-27b',
   searchRequestLimit: 30,
   feedbackEvidenceLimit: 30,
+  modelSearchNarrowingEnabled: true,
   finalRerankEnabled: true,
   finalRerankTopM: 30,
   searchBudgetSeconds: 60,

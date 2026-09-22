@@ -88,7 +88,8 @@ function isExtensionRequest(message: unknown): message is ExtensionRequest {
     return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && typeof value.query === 'string';
   }
   if (value.type === 'planner:feedback') {
-    return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object';
+    return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && Boolean(value.input) && typeof value.input === 'object'
+      && (value.modelSearchNarrowingEnabled === undefined || typeof value.modelSearchNarrowingEnabled === 'boolean');
   }
   if (value.type === 'planner:rerank') {
     return isSourceCapabilities(value.capabilities) && typeof value.requestId === 'string' && Boolean(value.requestId) && isFinalRerankInput(value.input);
@@ -202,7 +203,10 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         }
 
         const settings = validateSettings(await dependencies.storage.get());
-        const planner = new PlannerClient(transport, settings, request.capabilities);
+        const plannerSettings = type === 'planner:feedback' && request.modelSearchNarrowingEnabled !== undefined
+          ? { ...settings, modelSearchNarrowingEnabled: request.modelSearchNarrowingEnabled }
+          : settings;
+        const planner = new PlannerClient(transport, plannerSettings, request.capabilities);
         if (type === 'planner:first') {
           sendResponse({ ok: true, plan: await planner.planFirstRound(request.query, plannerController!.signal) });
         } else if (type === 'planner:feedback') {

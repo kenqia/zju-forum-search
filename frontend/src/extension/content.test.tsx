@@ -24,6 +24,7 @@ describe('extension content UI', () => {
     await expect(planner.planFirstRound('测试')).rejects.toThrow('test response');
     await expect(planner.planFeedback({ query: '测试', executedSearches: [], candidates: [] })).rejects.toThrow('test response');
     expect(requests.map((request) => request.type)).toEqual(['planner:first', 'planner:feedback']);
+    expect(requests[1]).toMatchObject({ modelSearchNarrowingEnabled: true });
     for (const request of requests) expect(request).toMatchObject({ capabilities });
   });
 
@@ -162,7 +163,12 @@ describe('extension content UI', () => {
     expect(root.textContent).toContain('站点检索请求次数上限');
     expect(root.textContent).not.toContain('检索时长');
     expect(root.textContent).toContain('包括分页');
-    const finalRerank = root.querySelector('input[role="switch"]') as HTMLInputElement;
+    const narrowing = root.querySelector('input[aria-labelledby="model-search-narrowing-title"]') as HTMLInputElement;
+    const finalRerank = root.querySelector('input[aria-labelledby="final-rerank-title"]') as HTMLInputElement;
+    expect(narrowing.checked).toBe(true);
+    expect(narrowing.closest('label')?.textContent).toContain('允许模型提前收窄搜索范围');
+    expect(narrowing.closest('label')?.textContent).toContain('更多站点请求');
+    expect(root.querySelector('label:nth-of-type(5)')?.textContent).toContain('允许模型提前收窄搜索范围');
     const finalRerankTopM = root.querySelector('input[aria-label="最终列表重排 Top-M"]') as HTMLInputElement;
     expect(finalRerank.checked).toBe(true);
     expect(finalRerank.getAttribute('aria-labelledby')).toBe('final-rerank-title');

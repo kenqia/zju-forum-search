@@ -45,6 +45,8 @@ export function normalizeSettings(value: StoredExtensionSettings): ExtensionSett
     llmModel: String(value.llmModel ?? '').trim(),
     searchRequestLimit: clampedCount(value.searchRequestLimit ?? DEFAULT_SETTINGS.searchRequestLimit, MIN_REQUEST_LIMIT, MAX_REQUEST_LIMIT, DEFAULT_SETTINGS.searchRequestLimit),
     feedbackEvidenceLimit: clampedCount(value.feedbackEvidenceLimit ?? DEFAULT_SETTINGS.feedbackEvidenceLimit, MIN_FEEDBACK_EVIDENCE_LIMIT, MAX_FEEDBACK_EVIDENCE_LIMIT, DEFAULT_SETTINGS.feedbackEvidenceLimit),
+    modelSearchNarrowingEnabled: typeof value.modelSearchNarrowingEnabled === 'boolean'
+      ? value.modelSearchNarrowingEnabled : DEFAULT_SETTINGS.modelSearchNarrowingEnabled,
     finalRerankEnabled,
     finalRerankTopM: clampedCount(value.finalRerankTopM ?? DEFAULT_SETTINGS.finalRerankTopM, MIN_FINAL_RERANK_TOP_M, MAX_FINAL_RERANK_TOP_M, DEFAULT_SETTINGS.finalRerankTopM),
     searchBudgetSeconds: clampedCount(budget, MIN_BUDGET_SECONDS, MAX_BUDGET_SECONDS, DEFAULT_SETTINGS.searchBudgetSeconds),

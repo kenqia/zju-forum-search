@@ -16,6 +16,7 @@ describe('extension settings', () => {
       llmModel: 'qwen-test',
       searchRequestLimit: 100,
       feedbackEvidenceLimit: 30,
+      modelSearchNarrowingEnabled: true,
       finalRerankEnabled: true,
       finalRerankTopM: 30,
       searchBudgetSeconds: 300,
@@ -26,6 +27,14 @@ describe('extension settings', () => {
   it('defaults the request limit for fresh installs and legacy settings', () => {
     expect(normalizeSettings({}).searchRequestLimit).toBe(30);
     expect(normalizeSettings({ searchBudgetSeconds: 45 }).searchRequestLimit).toBe(30);
+  });
+
+  it('defaults model search narrowing on and rejects invalid stored values', () => {
+    expect(normalizeSettings({}).modelSearchNarrowingEnabled).toBe(true);
+    expect(normalizeSettings({ modelSearchNarrowingEnabled: false }).modelSearchNarrowingEnabled).toBe(false);
+    for (const value of [null, 'false', 0, {}, []]) {
+      expect(normalizeSettings({ modelSearchNarrowingEnabled: value as boolean }).modelSearchNarrowingEnabled).toBe(true);
+    }
   });
 
   it('defaults and clamps the feedback evidence limit to 10 through 100', () => {
