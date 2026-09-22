@@ -358,11 +358,17 @@ export function finalRerankSystemPrompt(): string {
 
 export type FeedbackInput = FeedbackRequestInput;
 
-export function buildFeedbackMessages(input: FeedbackInput, capabilities: SourceCapabilities, currentDate?: string): { role: string; content: string }[] {
+function feedbackMessagesForPayload(
+  payload: ReturnType<typeof buildFeedbackPayload>, capabilities: SourceCapabilities,
+): { role: string; content: string }[] {
   return [
     { role: 'system', content: feedbackSystemPrompt(capabilities) },
-    { role: 'user', content: JSON.stringify(buildFeedbackPayload(input, currentDate)) },
+    { role: 'user', content: JSON.stringify(payload) },
   ];
+}
+
+export function buildFeedbackMessages(input: FeedbackInput, capabilities: SourceCapabilities, currentDate?: string): { role: string; content: string }[] {
+  return feedbackMessagesForPayload(buildFeedbackPayload(input, currentDate), capabilities);
 }
 
 export class PlannerClient {
@@ -387,13 +393,14 @@ export class PlannerClient {
   }
 
   async planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
-    const content = await this.transport.chatCompletions(this.settings, buildFeedbackMessages(input, this.capabilities, this.today()), signal);
+    const payload = buildFeedbackPayload(input, this.today());
+    const content = await this.transport.chatCompletions(this.settings, feedbackMessagesForPayload(payload, this.capabilities), signal);
     const raw = parseJson(content);
     assertFeedbackShape(raw);
     return normalizeFeedbackPlan(
       raw,
-      new Set(input.candidates.map((candidate) => candidate.key)),
-      new Set(input.candidates.filter((candidate) => candidate.title.trim()).map((candidate) => candidate.key)),
+      new Set(payload.candidates.map((candidate) => candidate.key)),
+      new Set(payload.candidates.filter((candidate) => candidate.title.trim()).map((candidate) => candidate.key)),
     );
   }
 

@@ -34,11 +34,11 @@ export function createFeedbackInput(input: FeedbackRequestInput): FeedbackReques
   const fits = () => encoder.encode(JSON.stringify(result)).byteLength <= FEEDBACK_METADATA_BYTE_LIMIT;
   for (const candidate of input.candidates.slice(0, FEEDBACK_CANDIDATE_LIMIT)) {
     result.candidates.push(sanitizedCandidate(candidate));
-    if (!fits()) { result.candidates.pop(); break; }
+    if (!fits()) result.candidates.pop();
   }
   for (const search of input.executedSearches.slice(0, 30)) {
     result.executedSearches.push({ query: search.query.slice(0, 120), hitCount: search.hitCount });
-    if (!fits()) { result.executedSearches.pop(); break; }
+    if (!fits()) result.executedSearches.pop();
   }
   return result;
 }
@@ -57,14 +57,12 @@ export function buildFeedbackPayload(input: FeedbackRequestInput, currentDate?: 
     payload.candidates.push({ key: candidate.key, ...modelMetadataPayload(candidate), matched_queries: candidate.matchedQueries });
     if (encoder.encode(JSON.stringify(payload)).byteLength > FEEDBACK_METADATA_BYTE_LIMIT) {
       payload.candidates.pop();
-      break;
     }
   }
   for (const search of input.executedSearches.slice(0, 30)) {
     payload.executed_searches.push({ query: search.query.slice(0, 120), hit_count: search.hitCount });
     if (encoder.encode(JSON.stringify(payload)).byteLength > FEEDBACK_METADATA_BYTE_LIMIT) {
       payload.executed_searches.pop();
-      break;
     }
   }
   return payload;

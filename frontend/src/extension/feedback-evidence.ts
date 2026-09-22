@@ -2,7 +2,7 @@ import { modelMetadata } from './model-metadata';
 import { folded } from './text';
 import type { FeedbackCandidate, FeedbackJudgment, RetrievedCandidate } from './types';
 
-export const MAX_FEEDBACK_CANDIDATES_PER_QUERY = 4;
+export const FAIR_SHARE_TARGET_PER_QUERY = 2;
 
 function recentDistinctQueries(entry: RetrievedCandidate): string[] {
   const result: string[] = [];
@@ -22,10 +22,42 @@ function priority(entry: RetrievedCandidate): number {
   return entry.relevanceGrade === 0 ? 1 : 2;
 }
 
-/** Select eligible evidence by priority, then round-robin across newest-evidence queries. */
+function selectWithinPriority(
+  entries: RetrievedCandidate[], limit: number,
+): RetrievedCandidate[] {
+  if (limit <= 0) return [];
+  const groups = new Map<string, RetrievedCandidate[]>();
+  for (const entry of entries) {
+    const group = folded(entry.latestIndependentQuery ?? '') || '_';
+    const values = groups.get(group) ?? [];
+    values.push(entry);
+    groups.set(group, values);
+  }
+
+  const queues = [...groups.entries()];
+  const selected: RetrievedCandidate[] = [];
+  for (let share = 0; share < FAIR_SHARE_TARGET_PER_QUERY && selected.length < limit; share += 1) {
+    for (const [, queue] of queues) {
+      const entry = queue.shift();
+      if (!entry) continue;
+      selected.push(entry);
+      if (selected.length >= limit) break;
+    }
+  }
+
+  if (selected.length >= limit) return selected;
+  const selectedIds = new Set(selected.map((entry) => entry.candidate.id));
+  selected.push(...entries
+    .filter((entry) => !selectedIds.has(entry.candidate.id))
+    .slice(0, limit - selected.length));
+  return selected;
+}
+
+/** Select eligible evidence by priority, fair share, then local pre-rank refill. */
 export function selectFeedbackEvidence(
   entries: RetrievedCandidate[], rankedIds: string[], limit: number,
 ): { entries: RetrievedCandidate[]; candidates: FeedbackCandidate[] } {
+  const normalizedLimit = Math.max(0, Math.floor(limit));
   const rank = new Map(rankedIds.map((id, index) => [id, index]));
   const eligible = entries.filter((entry) => (entry.evidenceRevision ?? 0) > (entry.judgedEvidenceRevision ?? 0)
     && rank.has(entry.candidate.id));
@@ -33,28 +65,16 @@ export function selectFeedbackEvidence(
     || (rank.get(a.candidate.id) ?? Infinity) - (rank.get(b.candidate.id) ?? Infinity)
     || (a.temporaryKey ?? '').localeCompare(b.temporaryKey ?? ''));
 
-  const selected: RetrievedCandidate[] = [];
-  const contributions = new Map<string, number>();
-  for (const currentPriority of [0, 1, 2]) {
-    const groups = new Map<string, RetrievedCandidate[]>();
-    for (const entry of eligible.filter((candidate) => priority(candidate) === currentPriority)) {
-      const group = folded(entry.latestIndependentQuery ?? '') || '_';
-      const values = groups.get(group) ?? [];
-      values.push(entry);
-      groups.set(group, values);
-    }
-    const queues = [...groups.entries()];
-    while (selected.length < limit && queues.some(([group, queue]) => queue.length && (contributions.get(group) ?? 0) < MAX_FEEDBACK_CANDIDATES_PER_QUERY)) {
-      for (const [group, queue] of queues) {
-        if ((contributions.get(group) ?? 0) >= MAX_FEEDBACK_CANDIDATES_PER_QUERY) continue;
-        const entry = queue.shift();
-        if (!entry) continue;
-        selected.push(entry);
-        contributions.set(group, (contributions.get(group) ?? 0) + 1);
-        if (selected.length >= limit) break;
-      }
-    }
-    if (selected.length >= limit) break;
+  const byPriority = [0, 1, 2].map((currentPriority) => eligible
+    .filter((entry) => priority(entry) === currentPriority));
+  const rescueReserve = normalizedLimit > 0 && byPriority[1].length > 0 ? 1 : 0;
+  const selected = selectWithinPriority(byPriority[0], normalizedLimit - rescueReserve);
+  let remaining = normalizedLimit - selected.length;
+  for (const currentPriority of [1, 2]) {
+    if (remaining <= 0) break;
+    const next = selectWithinPriority(byPriority[currentPriority], remaining);
+    selected.push(...next);
+    remaining -= next.length;
   }
   return {
     entries: selected,

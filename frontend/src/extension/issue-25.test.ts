@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildFeedbackPayload, createFeedbackInput } from './feedback-payload';
-import { selectFeedbackEvidence } from './feedback-evidence';
+import { applyFeedbackJudgments, selectFeedbackEvidence } from './feedback-evidence';
 import { PlannerClient } from './planner';
 import { mergeHits } from './retrieval';
 import { SearchSession, SearchSessionError } from './search-session';
@@ -52,7 +52,7 @@ describe('issue #25 retrieval waves', () => {
     const result = await new SearchSession({ planner, source, sleep: async () => undefined, finalRerankEnabled: false }).run('资料', 20, 30);
 
     expect(calls.slice(0, 5)).toEqual(['首词:first', '次词:first', '新词:first', '首词:page-2', '次词:page-2']);
-    expect(feedbackCalls[0].candidates).toHaveLength(8);
+    expect(feedbackCalls[0].candidates).toHaveLength(30);
     expect(result.stopReason).toBe('model_stop');
   });
 
@@ -194,7 +194,20 @@ describe('issue #25 retrieval waves', () => {
 });
 
 describe('issue #25 feedback protocol', () => {
-  it('selects every higher-priority candidate first and caps each evidence query at four', () => {
+  it('uses the configured capacity for one broad query beyond the old four-candidate cap', () => {
+    const entries = Array.from({ length: 12 }, (_, index): RetrievedCandidate => ({
+      candidate: hit(`broad-${index}`).candidate,
+      observations: [{ query: '宽泛词', round: 1 }], documents: [{ title: `broad-${index}` }],
+      temporaryKey: `k-${index}`, evidenceRevision: 1, judgedEvidenceRevision: 0,
+      latestIndependentQuery: '宽泛词',
+    }));
+
+    const selected = selectFeedbackEvidence(entries, entries.map((entry) => entry.candidate.id), 9);
+
+    expect(selected.entries.map((entry) => entry.candidate.id)).toEqual(entries.slice(0, 9).map((entry) => entry.candidate.id));
+  });
+
+  it('selects every higher-priority candidate first, then refills beyond the fairness target', () => {
     const entry = (id: string, query: string, patch: Partial<RetrievedCandidate> = {}): RetrievedCandidate => ({
       candidate: hit(id).candidate,
       observations: [{ query, round: 1 }], documents: [{ title: id }], temporaryKey: `k-${id}`,
@@ -213,9 +226,83 @@ describe('issue #25 feedback protocol', () => {
 
     const selected = selectFeedbackEvidence(entries, entries.map((candidate) => candidate.candidate.id), 10);
 
-    expect(selected.entries.slice(0, 5).every((candidate) => candidate.relevanceGrade === undefined)).toBe(true);
-    expect(selected.entries.filter((candidate) => candidate.latestIndependentQuery === '宽泛词')).toHaveLength(4);
-    expect(selected.entries.map((candidate) => candidate.candidate.id)).not.toContain('judged-a');
+    expect(selected.entries.filter((candidate) => candidate.relevanceGrade === undefined)).toHaveLength(5);
+    expect(selected.entries.filter((candidate) => candidate.latestIndependentQuery === '宽泛词')).toHaveLength(6);
+    expect(selected.entries.map((candidate) => candidate.relevanceGrade)).toEqual([
+      undefined, undefined, undefined, undefined, undefined, 0, 2,
+    ]);
+  });
+
+  it('round-robins two candidates per query before using local pre-rank refill', () => {
+    const entry = (id: string, query: string): RetrievedCandidate => ({
+      candidate: hit(id).candidate,
+      observations: [{ query, round: 1 }], documents: [{ title: id }], temporaryKey: `k-${id}`,
+      evidenceRevision: 1, judgedEvidenceRevision: 0, latestIndependentQuery: query,
+    });
+    const entries = [
+      entry('q1-a', 'q1'), entry('q1-b', 'q1'), entry('q1-c', 'q1'),
+      entry('q2-a', 'q2'), entry('q2-b', 'q2'), entry('q2-c', 'q2'),
+    ];
+
+    const selected = selectFeedbackEvidence(entries, entries.map((candidate) => candidate.candidate.id), 6);
+
+    expect(selected.entries.map((candidate) => candidate.candidate.id)).toEqual([
+      'q1-a', 'q2-a', 'q1-b', 'q2-b', 'q1-c', 'q2-c',
+    ]);
+  });
+
+  it('reserves one slot for a grade 0 rescue candidate behind an unjudged backlog', () => {
+    const entry = (id: string, query: string, patch: Partial<RetrievedCandidate> = {}): RetrievedCandidate => ({
+      candidate: hit(id).candidate,
+      observations: [{ query, round: 1 }], documents: [{ title: id }], temporaryKey: `k-${id}`,
+      evidenceRevision: 1, judgedEvidenceRevision: 0, latestIndependentQuery: query,
+      ...patch,
+    });
+    const entries = [
+      ...Array.from({ length: 10 }, (_, index) => entry(`new-${index}`, '宽泛词')),
+      entry('rescue', '精确词', { relevanceGrade: 0, evidenceRevision: 2, judgedEvidenceRevision: 1 }),
+    ];
+
+    const selected = selectFeedbackEvidence(entries, entries.map((candidate) => candidate.candidate.id), 5);
+
+    expect(selected.entries).toHaveLength(5);
+    expect(selected.entries.slice(0, 4).every((candidate) => candidate.relevanceGrade === undefined)).toBe(true);
+    expect(selected.entries.at(-1)?.candidate.id).toBe('rescue');
+  });
+
+  it('releases the rescue reservation and keeps lower priorities behind unjudged candidates', () => {
+    const entry = (id: string, relevanceGrade?: 0 | 1 | 2 | 3): RetrievedCandidate => ({
+      candidate: hit(id).candidate,
+      observations: [{ query: '检索词', round: 1 }], documents: [{ title: id }], temporaryKey: `k-${id}`,
+      evidenceRevision: 2, judgedEvidenceRevision: relevanceGrade === undefined ? 0 : 1,
+      latestIndependentQuery: '检索词', relevanceGrade,
+    });
+    const entries = [entry('new-a'), entry('new-b'), entry('judged', 2)];
+
+    const selected = selectFeedbackEvidence(entries, entries.map((candidate) => candidate.candidate.id), 2);
+
+    expect(selected.entries.map((candidate) => candidate.candidate.id)).toEqual(['new-a', 'new-b']);
+  });
+
+  it('assigns a multiply observed candidate only to its latest independent query group', () => {
+    const entry = (id: string, latestIndependentQuery: string, observations: string[]): RetrievedCandidate => ({
+      candidate: hit(id).candidate,
+      observations: observations.map((query, index) => ({ query, round: index + 1 })),
+      documents: [{ title: id }], temporaryKey: `k-${id}`,
+      evidenceRevision: observations.length, judgedEvidenceRevision: 0, latestIndependentQuery,
+    });
+    const entries = [
+      entry('shared', 'q2', ['q1', 'q2']),
+      entry('q1-a', 'q1', ['q1']), entry('q1-b', 'q1', ['q1']),
+      entry('q2-a', 'q2', ['q2']), entry('q2-b', 'q2', ['q2']),
+    ];
+
+    const selected = selectFeedbackEvidence(entries, entries.map((candidate) => candidate.candidate.id), 4);
+
+    expect(selected.entries.map((candidate) => candidate.candidate.id)).toEqual([
+      'shared', 'q1-a', 'q2-a', 'q1-b',
+    ]);
+    expect(selected.entries.filter((candidate) => candidate.candidate.id === 'shared')).toHaveLength(1);
   });
 
   it('treats visible metadata changes, but not same-query position changes, as independent evidence', () => {
@@ -265,5 +352,73 @@ describe('issue #25 feedback protocol', () => {
     for (const forbidden of ['secret-source', 'secret-', 'https://secret.test', '作者', 'author', '片段', '正文', '回帖', 'authorization']) {
       expect(json).not.toContain(forbidden);
     }
+  });
+
+  it('skips an oversized candidate and continues packing later candidates', () => {
+    const input: FeedbackRequestInput = {
+      query: '资料',
+      executedSearches: [],
+      candidates: [
+        ...Array.from({ length: 15 }, (_, index) => ({ key: `long-${index}`, title: `过长${index}`.repeat(20), matchedQueries: ['首词'] })),
+        {
+          key: 'overflow', title: '中间超限候选'.repeat(30), matchedQueries: ['首词'.repeat(40), '次词'.repeat(40), '第三词'.repeat(40)],
+          publishedAt: '2026-09-20'.repeat(8), section: '学习天地'.repeat(30), replyCount: 42,
+        },
+        { key: 'grade0-rescue', title: '翻案候选', matchedQueries: ['精确词'] },
+        { key: 'judged-new-evidence', title: '其他新证据', matchedQueries: ['次词'] },
+      ],
+    };
+    const payload = buildFeedbackPayload(input, '2026-09-20');
+
+    const packedKeys = payload.candidates.map((candidate) => candidate.key);
+    expect(packedKeys).not.toContain('overflow');
+    expect(packedKeys.slice(-2)).toEqual(['grade0-rescue', 'judged-new-evidence']);
+    expect(new TextEncoder().encode(JSON.stringify(payload)).byteLength).toBeLessThanOrEqual(4000);
+  });
+
+  it('applies skip-and-continue packing at the first whitelist boundary', () => {
+    const input: FeedbackRequestInput = {
+      query: '资料', executedSearches: [],
+      candidates: [
+        ...Array.from({ length: 15 }, (_, index) => ({ key: `long-${index}`, title: `过长${index}`.repeat(20), matchedQueries: ['首词'] })),
+        { key: 'overflow', title: '中间超限候选'.repeat(30), matchedQueries: ['首词'.repeat(40), '次词'.repeat(40), '第三词'.repeat(40)], section: '学习天地'.repeat(30) },
+        { key: 'short', title: '可用候选', matchedQueries: ['首词'] },
+      ],
+    };
+
+    const core = createFeedbackInput(input);
+
+    expect(core.candidates.map((candidate) => candidate.key)).toContain('short');
+    expect(core.candidates.map((candidate) => candidate.key)).not.toContain('overflow');
+    expect(new TextEncoder().encode(JSON.stringify(core)).byteLength).toBeLessThanOrEqual(4000);
+  });
+
+  it('does not mark candidates omitted by final serialization as judged', async () => {
+    const candidates = Array.from({ length: 101 }, (_, index) => ({
+      key: `c${index}`, title: `主题${index}`, matchedQueries: ['首词'],
+    }));
+    const core = createFeedbackInput({ query: '资料', executedSearches: [], candidates });
+    expect(core.candidates.length).toBeLessThanOrEqual(100);
+    const payload = buildFeedbackPayload(core, '2026-09-22');
+    const payloadKeys = new Set(payload.candidates.map((candidate) => candidate.key));
+    const omitted = core.candidates.find((candidate) => !payloadKeys.has(candidate.key));
+    expect(omitted).toBeDefined();
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      judgments: core.candidates.map((candidate) => ({ key: candidate.key, grade: 0 })),
+      new_searches: [], should_stop: true,
+    }) }, DEFAULT_SETTINGS, { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' }, () => '2026-09-22');
+    const entries = core.candidates.map((candidate): RetrievedCandidate => ({
+      candidate: hit(candidate.key).candidate,
+      observations: [{ query: '首词', round: 1 }], documents: [{ title: candidate.title }],
+      temporaryKey: candidate.key, evidenceRevision: 1, judgedEvidenceRevision: 0,
+      latestIndependentQuery: '首词',
+    }));
+
+    const feedback = await client.planFeedback(core);
+    applyFeedbackJudgments(entries, feedback.judgments);
+
+    expect(feedback.judgments.map((judgment) => judgment.key)).not.toContain(omitted!.key);
+    expect(entries.find((entry) => entry.temporaryKey === omitted!.key)?.judgedEvidenceRevision).toBe(0);
+    expect(entries.some((entry) => entry.judgedEvidenceRevision === 1)).toBe(true);
   });
 });
