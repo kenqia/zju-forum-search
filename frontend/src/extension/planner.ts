@@ -218,7 +218,10 @@ function stopQueryList(values: unknown, allowLegacyStrings = false): StopQuerySu
 
 export function normalizeModelPlan(raw: unknown): ModelQueryPlan {
   const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const searches = searchList(source.searches);
+  const baseSearches = searchList(source.searches);
+  const searches = baseSearches.length
+    ? searchList([...baseSearches, ...(Array.isArray(source.additional_searches) ? source.additional_searches : [])])
+    : [];
   const requiredConcepts = uniqueBy(
     (Array.isArray(source.required_concepts) ? source.required_concepts : [])
       .map((item) => ({
@@ -344,13 +347,14 @@ export function firstRoundSystemPrompt(capabilities: SourceCapabilities): string
   return `你是搜索查询规划器。根据用户的自然语言查询生成 JSON 查询计划。
 
 ${sourceInstructions(capabilities)}
-检索词应覆盖高信号原词、稳定简称、同义表达和有价值的精确组合。每个检索词都标记 role：precise 组合多个意图约束，balanced 保留部分约束，anchor 只保留稳定的核心实体或概念。不要机械拆分中文短语。不要假设你看过来源内容。用户消息中的 current_date 是扩展所在设备的当前日期，所有相对时间约束都必须据此换算为明确日期。
+先在 searches 中列出完整的基础检索组合：高信号原词、有价值的精确组合和宽锚点。然后在 additional_searches 中另行追加可靠的简称、别称和同义表达，可以把它们与原有约束组合成新检索词。新增词不能替换、删减 searches 中的基础词；有多个不同的常见叫法时尽量分别追加。只使用可能真实出现在来源内容中的叫法，不编造缩写，不重复仅空格或字序不同的词。没有可靠的额外叫法时返回空数组。两组检索词都按预期检索价值排序，并为每个检索词标记 role：precise 组合多个意图约束，balanced 保留部分约束，anchor 只保留稳定的核心实体或概念。不要机械拆分中文短语。不要假设你看过来源内容。用户消息中的 current_date 是扩展所在设备的当前日期，所有相对时间约束都必须据此换算为明确日期。
 ${capabilities.searchSurface === 'title' ? '标题来源的查询组合必须至少包含一个 anchor 和至少一个非 anchor。"求助"、"经验"、"帖子"、"有没有"等通用宽词不能作为 anchor。' : ''}
 
 返回以下 JSON 对象，不要返回额外字段或解释文字：
 {
   "summary": "对检索目标的简短解释",
-  "searches": [{"query": "发送给搜索接口的检索词", "purpose": "这次检索补足什么", "role": "precise | balanced | anchor"}],
+  "searches": [{"query": "基础检索词", "purpose": "这次检索补足什么", "role": "precise | balanced | anchor"}],
+  "additional_searches": [{"query": "新增的简称或同义检索词", "purpose": "对应哪种叫法", "role": "precise | balanced | anchor"}],
   "required_concepts": [{"name": "必须满足的概念", "expressions": ["检索内容中可能出现的表达"]}],
   "excluded_terms": ["命中后应降权的表达"],
   "time_constraint": {"expression": "用户原始时间约束", "start_date": "YYYY-MM-DD 或 null", "end_date": "YYYY-MM-DD 或 null"}
@@ -368,10 +372,10 @@ ${sourceInstructions(capabilities)}
 
 规则：
 - 给每个能判断的候选返回 0、1、2 或 3：3 明确高度相关，2 大概率相关，1 信息不足、部分相关或不确定，0 明确无关。拿不准时用 1。
-- candidates 可以为空。没有候选或当前没有 grade 2/3 时，可以仅根据原始查询提出 query 依据的救援检索词，用同义语、上位词、缩短表达或概念拆分放宽召回。
+- candidates 可以为空。没有候选或当前没有 grade 2/3 时，可以仅根据原始查询提出 query 依据的救援检索词，用可靠的简称、同义语、上位词、缩短表达或概念拆分放宽召回。
 - 只追加新检索词，或建议停止仍有 continuation 的已执行检索词；不得修改首轮确定的必须概念、排除词、时间约束。stop_queries 不是用户维护的停用词表，只控制本次运行的一个检索分支。
 - 每条新检索词必须声明 basis。query 表示只根据原始查询放宽表达，support_keys 必须为空。evidence 表示从本轮候选的原生标题学习，必须提供 1 至 3 个去重 support_keys。支持集合只含 grade 1 时必须声明 clue_only: true；支持集合中有 grade 2/3 时按普通 evidence 扩展处理，即使同时包含 grade 1。grade 0 不能提供支持。
-- evidence 检索词只能从支持候选的原生标题学习。板块可以帮助判断相关性，但不能作为新检索词的词汇来源。回复数不能单独提高 grade，也不能作为新检索词的词汇来源。
+- evidence 检索词只能从支持候选的原生标题学习。标题出现新的简称、别称或同义表达时，可分别追加有检索价值的新词，不替换已执行的检索词。板块可以帮助判断相关性，但不能作为新检索词的词汇来源。回复数不能单独提高 grade，也不能作为新检索词的词汇来源。
 - clue_only 只声明 grade 1 候选提供下一跳线索。本地只核对支持关系、当前 grade 和原生标题可见性，不做标题子串、词元重叠或语义相似度校验。
 - stop_queries 逐条填写 query 和简短 reason。只能建议已执行、当前仍有 continuation 的检索词；未执行、已耗尽、空白或重复检索词不要填写。reason 只用于本地诊断，不参与执行判断，也不会进入结果卡片。
 ${narrowingInstructions}

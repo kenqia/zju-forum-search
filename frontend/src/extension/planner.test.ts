@@ -58,6 +58,9 @@ describe('PlannerClient', () => {
     }
     expect(prompts[1]).toContain('标题为空');
     expect(prompts[1]).toContain('不得推测正文');
+    expect(prompts[0]).toContain('additional_searches');
+    expect(prompts[0]).toContain('新增词不能替换、删减 searches 中的基础词');
+    expect(prompts[1]).toContain('标题出现新的简称、别称或同义表达时');
     if (searchSurface === 'title' && querySyntax === 'plain-keyword') {
       for (const prompt of prompts) {
         expect(prompt).toContain('微积分 历年 试卷');
@@ -112,6 +115,32 @@ describe('PlannerClient', () => {
       excludedTerms: [],
       timeConstraint: { expression: '', startDate: null, endDate: null },
     });
+  });
+
+  it('appends distinct aliases after the full base plan without replacing base terms', () => {
+    const plan = normalizeModelPlan({
+      searches: [
+        { query: '微积分 历年 试卷', role: 'precise' },
+        { query: '微积分', role: 'anchor' },
+      ],
+      additional_searches: [
+        { query: '高数 历年 试卷', role: 'precise' },
+        { query: '微积分', role: 'anchor' },
+        { query: '高等数学', role: 'anchor' },
+      ],
+    });
+
+    expect(plan.searches.map(({ query }) => query)).toEqual([
+      '微积分 历年 试卷', '微积分', '高数 历年 试卷', '高等数学',
+    ]);
+  });
+
+  it('does not treat aliases alone as a valid base plan', async () => {
+    const client = new PlannerClient({ chatCompletions: async () => JSON.stringify({
+      searches: [], additional_searches: ['高数'],
+    }) }, DEFAULT_SETTINGS, capabilities);
+
+    await expect(client.planFirstRound('帮我找微积分')).rejects.toThrow('模型没有返回可用检索词');
   });
 
   it('reports the semantic error when no usable search remains', async () => {
