@@ -13,6 +13,14 @@ npm run build
 
 构建产物位于 `frontend/dist/`。在 Edge 打开 `edge://extensions`，启用“开发人员模式”，点击“加载解压缩的扩展”，然后选择该目录。在 `https://www.cc98.org/` 或 `https://www.duoduo.link/` 登录并刷新页面，右下角会出现“搜”悬浮球。
 
+验收 Campus Search UI v2 时运行：
+
+```bash
+bash frontend/scripts/campus-search-ui-v2-acceptance-wizard.sh
+```
+
+向导先运行测试、类型检查、生产构建和扩展产物校验，再逐步引导在 Edge 中重载扩展并检查搜索空态、窄窗口布局、设置控件、隐私说明、真实搜索状态与结果列表。真实搜索阶段会访问当前论坛和已配置模型；请使用普通、非敏感查询。向导不会读取或保存 API key、Cookie、登录态、请求内容、模型响应或页面内容。若临时调整设置，请在结束前恢复原值。
+
 扩展复用当前站点登录态，没有账号输入入口。CC98 使用原站短期授权，朵朵使用原站微信扫码登录后的授权。遇到未登录或登录过期时，先在原站完成登录，再刷新页面。
 
 验收 Issue #26 的本地预排序时运行：

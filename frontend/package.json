@@ -8,17 +8,19 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@base-ui/react": "^1.8.0",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
+    "lucide-react": "^1.47.0",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
-    "vitest": "latest",
-    "jsdom": "latest",
+    "@types/node": "^22.20.3",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "@types/node": "^22.20.3"
+    "jsdom": "latest",
+    "vitest": "latest"
   }
 }

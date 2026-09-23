@@ -92,7 +92,7 @@ describe('extension content UI', () => {
     expect(container.textContent).toContain('最终列表重排完成');
 
     await act(async () => root.render(<SearchStatus snapshot={{ ...base, phase: 'complete', stopReason: 'model_stop', finalRerank: 'failed', statusText: '最终列表重排未完成。' }} running={false} onStop={vi.fn()} />));
-    expect(container.querySelector('.status.error')?.textContent).toContain('最终列表重排未完成');
+    expect(container.querySelector('.status-row.error')?.textContent).toContain('最终列表重排未完成');
     await act(async () => root.unmount());
   });
 
@@ -104,7 +104,7 @@ describe('extension content UI', () => {
 
     const details = container.querySelector('details');
     expect(details?.open).toBe(false);
-    expect(details?.querySelector('summary')?.textContent).toContain('已隐藏的明确无关结果（1）');
+    expect(details?.querySelector('summary')?.textContent).toContain('已隐藏 1 个低相关结果');
     expect(details?.querySelector('a')?.getAttribute('href')).toBe(topic.url);
     expect(details?.textContent).not.toContain('grade');
     await act(async () => root.unmount());
@@ -123,7 +123,7 @@ describe('extension content UI', () => {
       emptyText="暂无"
     />));
 
-    expect(container.querySelector('.result-counts')?.textContent).toBe('主结果 1 · 软隔离 1 · 时间范围外 2');
+    expect(container.querySelector('.result-counts')?.textContent).toBe('1 个结果 · 1 个已隐藏 · 2 个超出时间范围');
     const activeCard = container.querySelector('.result');
     expect(activeCard?.textContent).toContain('高数资料');
     expect(activeCard?.textContent).toContain('本地作者');
@@ -152,7 +152,7 @@ describe('extension content UI', () => {
       (root.querySelector('[aria-label="打开自然语言搜索"]') as HTMLButtonElement).click();
     });
     expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('false');
-    expect((root.querySelector('[aria-label="自然语言查询"]') as HTMLInputElement).placeholder).toBe('例如：找近两年的操作系统课程的讨论和资料');
+    expect((root.querySelector('[aria-label="自然语言查询"]') as HTMLInputElement).placeholder).toBe('找课程、老师、资料或校园讨论…');
     expect(root.textContent).toContain('作者只在本地结果卡片显示，不会发送给模型');
 
     await act(async () => {
@@ -160,21 +160,21 @@ describe('extension content UI', () => {
     });
     expect(root.querySelector('input[type="password"]')).not.toBeNull();
     expect((root.querySelector('input[type="password"]') as HTMLInputElement).value).toBe('');
-    expect(root.textContent).toContain('站点检索请求次数上限');
+    expect(root.textContent).toContain('站点请求上限');
     expect(root.textContent).not.toContain('检索时长');
     expect(root.textContent).toContain('包括分页');
-    const narrowing = root.querySelector('input[aria-labelledby="model-search-narrowing-title"]') as HTMLInputElement;
-    const finalRerank = root.querySelector('input[aria-labelledby="final-rerank-title"]') as HTMLInputElement;
-    expect(narrowing.checked).toBe(true);
-    expect(narrowing.closest('label')?.textContent).toContain('允许模型提前收窄搜索范围');
-    expect(narrowing.closest('label')?.textContent).toContain('更多站点请求');
-    expect(root.querySelector('label:nth-of-type(5)')?.textContent).toContain('允许模型提前收窄搜索范围');
+    const narrowing = root.querySelector('[role="switch"][aria-labelledby="model-search-narrowing-title"]') as HTMLElement;
+    const finalRerank = root.querySelector('[role="switch"][aria-labelledby="final-rerank-title"]') as HTMLElement;
+    expect(narrowing.hasAttribute('data-checked')).toBe(true);
+    expect(narrowing.parentElement?.textContent).toContain('允许模型提前收窄搜索范围');
+    expect(narrowing.parentElement?.textContent).toContain('更多站点请求');
+    expect(root.querySelector('.switch-setting')?.textContent).toContain('允许模型提前收窄搜索范围');
     const finalRerankTopM = root.querySelector('input[aria-label="最终列表重排 Top-M"]') as HTMLInputElement;
-    expect(finalRerank.checked).toBe(true);
+    expect(finalRerank.hasAttribute('data-checked')).toBe(true);
     expect(finalRerank.getAttribute('aria-labelledby')).toBe('final-rerank-title');
     expect(finalRerank.getAttribute('aria-describedby')).toBe('final-rerank-description');
-    expect(finalRerank.closest('label')?.textContent).toContain('最终列表重排');
-    expect(finalRerank.closest('label')?.textContent).toContain('调整前排顺序');
+    expect(finalRerank.parentElement?.textContent).toContain('搜索完成后优化结果顺序');
+    expect(finalRerank.parentElement?.textContent).toContain('调整前排顺序');
     expect(finalRerankTopM.value).toBe('30');
     expect(finalRerankTopM.disabled).toBe(false);
     await act(async () => finalRerank.click());

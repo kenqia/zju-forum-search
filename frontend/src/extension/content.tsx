@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Collapsible, NumberField, Switch, Tabs } from '@base-ui/react';
+import { Check, ChevronDown, LoaderCircle, Minus, Plus, Search, ShieldCheck, Settings2, X } from 'lucide-react';
 import panelCss from './panel.css?inline';
 
 import { sourceRegistry } from './source-registry';
@@ -107,7 +109,7 @@ function SettingsPanel({ runtime, settings, onSettings }: {
   onSettings(settings: PublicExtensionSettings): void;
 }) {
   const [draft, setDraft] = useState(settings);
-  const [status, setStatus] = useState('API key 只保存在 chrome.storage，不会写入页面、日志或仓库。');
+  const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
   useEffect(() => setDraft(settings), [settings]);
 
@@ -126,79 +128,125 @@ function SettingsPanel({ runtime, settings, onSettings }: {
     }
   }
 
-  return <>
-    <form className="settings-form" onSubmit={save}>
-      <label>OpenAI 兼容 base URL
+  const updateCount = (key: 'searchRequestLimit' | 'feedbackEvidenceLimit' | 'finalRerankTopM', value: number | null) => {
+    if (value === null || Number.isNaN(value)) return;
+    setDraft({ ...draft, [key]: value });
+  };
+
+  return <form className="settings-form" onSubmit={save}>
+    <section className="settings-section" aria-labelledby="settings-model-heading">
+      <h2 id="settings-model-heading">模型</h2>
+      <label className="field">OpenAI 兼容 base URL
         <input type="url" value={draft.llmBaseUrl} onChange={(event) => setDraft({ ...draft, llmBaseUrl: event.target.value })} placeholder="https://example.com/v1" required />
       </label>
-      <label>API key
+      <label className="field">API key
         <input type="password" value={draft.llmApiKey} onChange={(event) => setDraft({ ...draft, llmApiKey: event.target.value })} autoComplete="new-password" placeholder={settings.hasApiKey ? '已保存；留空表示不修改' : '尚未设置'} required={!settings.hasApiKey} />
       </label>
-      <label>模型名称
+      <label className="field">模型名称
         <input value={draft.llmModel} onChange={(event) => setDraft({ ...draft, llmModel: event.target.value })} placeholder="model-name" required />
       </label>
-      <label>站点检索请求次数上限
-        <input type="number" min="1" max="100" value={draft.searchRequestLimit} onChange={(event) => setDraft({ ...draft, searchRequestLimit: Number(event.target.value) })} required />
-      </label>
-      <label className="toggle-setting">
-        <span className="toggle-copy">
-          <span className="toggle-title" id="model-search-narrowing-title">允许模型提前收窄搜索范围</span>
-          <span className="toggle-description" id="model-search-narrowing-description">关闭后可能发出更多站点请求，但仍受已设置的站点检索请求次数上限约束。</span>
-        </span>
-        <input
-          className="toggle-input"
-          type="checkbox"
-          role="switch"
-          aria-labelledby="model-search-narrowing-title"
-          aria-describedby="model-search-narrowing-description"
-          checked={draft.modelSearchNarrowingEnabled}
-          onChange={(event) => setDraft({ ...draft, modelSearchNarrowingEnabled: event.target.checked })}
-        />
-        <span className="toggle-control" aria-hidden="true" />
-      </label>
-      <label>单次反馈证据数量
-        <input type="number" min="10" max="100" value={draft.feedbackEvidenceLimit} onChange={(event) => setDraft({ ...draft, feedbackEvidenceLimit: Number(event.target.value) })} required />
-      </label>
-      <label>最终列表重排 Top-M
-        <input aria-label="最终列表重排 Top-M" type="number" min="10" max="150" value={draft.finalRerankTopM} disabled={!draft.finalRerankEnabled} onChange={(event) => setDraft({ ...draft, finalRerankTopM: Number(event.target.value) })} required />
-      </label>
-      <label className="toggle-setting">
-        <span className="toggle-copy">
-          <span className="toggle-title" id="final-rerank-title">最终列表重排</span>
-          <span className="toggle-description" id="final-rerank-description">搜索结束后，让模型调整前排顺序，并移除仍未判断且明确无关的结果。</span>
-        </span>
-        <input
-          className="toggle-input"
-          type="checkbox"
-          role="switch"
-          aria-labelledby="final-rerank-title"
-          aria-describedby="final-rerank-description"
-          checked={draft.finalRerankEnabled}
-          onChange={(event) => setDraft({ ...draft, finalRerankEnabled: event.target.checked })}
-        />
-        <span className="toggle-control" aria-hidden="true" />
-      </label>
+    </section>
+
+    <section className="settings-section" aria-labelledby="settings-retrieval-heading">
+      <h2 id="settings-retrieval-heading">检索</h2>
+      <NumberSetting label="站点请求上限" description="包含分页" value={draft.searchRequestLimit} min={1} max={100} onChange={(value) => updateCount('searchRequestLimit', value)} />
+      <NumberSetting label="单轮反馈证据" description="每次模型反馈最多候选数" value={draft.feedbackEvidenceLimit} min={10} max={100} onChange={(value) => updateCount('feedbackEvidenceLimit', value)} />
+      <SwitchSetting
+        title="允许模型提前收窄搜索范围"
+        description="关闭后可能发出更多站点请求，但仍受请求上限限制。"
+        checked={draft.modelSearchNarrowingEnabled}
+        titleId="model-search-narrowing-title"
+        descriptionId="model-search-narrowing-description"
+        onChange={(checked) => setDraft({ ...draft, modelSearchNarrowingEnabled: checked })}
+      />
       <p className="hint">每次站点搜索请求都计入上限，包括分页；模型调用不计入。</p>
-      <div className="settings-actions">
-        <p className="hint">保存时只申请该 base URL 所在主机。</p>
-        <button className="primary" disabled={saving}>{saving ? '保存中…' : '保存设置'}</button>
-      </div>
-    </form>
-    <p className="status" role="status">{status}</p>
-  </>;
+    </section>
+
+    <section className="settings-section" aria-labelledby="settings-ranking-heading">
+      <h2 id="settings-ranking-heading">排序</h2>
+      <SwitchSetting
+        title="搜索完成后优化结果顺序"
+        description="搜索结束后让模型调整前排顺序；关闭或失败时保留本地排序。"
+        checked={draft.finalRerankEnabled}
+        titleId="final-rerank-title"
+        descriptionId="final-rerank-description"
+        onChange={(checked) => setDraft({ ...draft, finalRerankEnabled: checked })}
+      />
+      <NumberSetting label="重排候选 Top-M" description="发送给最终重排的前排结果数" value={draft.finalRerankTopM} min={10} max={150} disabled={!draft.finalRerankEnabled} onChange={(value) => updateCount('finalRerankTopM', value)} inputLabel="最终列表重排 Top-M" />
+    </section>
+
+    <section className="settings-section" aria-labelledby="settings-privacy-heading">
+      <h2 id="settings-privacy-heading">隐私</h2>
+      <PrivacyDisclosure />
+    </section>
+
+    <div className="settings-footer">
+      <p className={`settings-status${status && status.includes('失败') ? ' error' : ''}`} role="status">{status || '设置会保存在浏览器本地'}</p>
+      <button className="primary" disabled={saving}><>{saving ? <LoaderCircle size={14} className="spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}</>{saving ? '保存中…' : '保存'}</button>
+    </div>
+  </form>;
+}
+
+function NumberSetting({ label, description, value, min, max, disabled, inputLabel, onChange }: {
+  label: string;
+  description: string;
+  value: number;
+  min: number;
+  max: number;
+  disabled?: boolean;
+  inputLabel?: string;
+  onChange(value: number | null): void;
+}) {
+  return <div className={`number-setting${disabled ? ' disabled' : ''}`}>
+    <div><span className="setting-title">{label}</span><span className="setting-description">{description}</span></div>
+    <NumberField.Root value={value} min={min} max={max} step={1} disabled={disabled} onValueChange={onChange}>
+      <NumberField.Group className="number-control">
+        <NumberField.Decrement className="number-step" aria-label={`减少${label}`}><Minus size={13} aria-hidden="true" /></NumberField.Decrement>
+        <NumberField.Input className="number-input" aria-label={inputLabel ?? label} />
+        <NumberField.Increment className="number-step" aria-label={`增加${label}`}><Plus size={13} aria-hidden="true" /></NumberField.Increment>
+      </NumberField.Group>
+    </NumberField.Root>
+  </div>;
+}
+
+function SwitchSetting({ title, description, checked, titleId, descriptionId, onChange }: {
+  title: string;
+  description: string;
+  checked: boolean;
+  titleId: string;
+  descriptionId: string;
+  onChange(checked: boolean): void;
+}) {
+  return <div className="switch-setting">
+    <div className="switch-copy"><span className="setting-title" id={titleId}>{title}</span><span className="setting-description" id={descriptionId}>{description}</span></div>
+    <Switch.Root checked={checked} onCheckedChange={onChange} aria-labelledby={titleId} aria-describedby={descriptionId} className="switch-control"><Switch.Thumb /></Switch.Root>
+  </div>;
+}
+
+function PrivacyDisclosure() {
+  return <Collapsible.Root className="disclosure">
+    <Collapsible.Trigger className="disclosure-trigger"><span><ShieldCheck size={15} aria-hidden="true" />隐私与发送给模型的数据</span><ChevronDown size={15} aria-hidden="true" /></Collapsible.Trigger>
+    <Collapsible.Panel className="disclosure-panel" keepMounted>
+      <p>反馈轮只会向模型发送原生标题、时间、板块和回复数。作者只在本地结果卡片显示，不会发送给模型。</p>
+      <p>正文派生标题仅在本地显示。正文、回帖和站点登录信息不会发送给模型。</p>
+      <p>API key 只保存在 chrome.storage，不会写入页面、日志或仓库。</p>
+    </Collapsible.Panel>
+  </Collapsible.Root>;
 }
 
 export function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
   const planned = snapshot.plan?.searches.map((search) => search.query) ?? [];
   return <>
     {snapshot.planningNotice && <p className="fallback-notice" role="status">{snapshot.planningNotice}</p>}
-    <details>
-    <summary>检索进度 · 第 {snapshot.round || 0} 个波次 · {snapshot.requestsMade} 次请求</summary>
+    <Collapsible.Root className="terms">
+    <Collapsible.Trigger className="terms-trigger"><span><span>检索详情</span><small>第 {snapshot.round || 0} 波 · {snapshot.requestsMade} 次请求</small></span><ChevronDown size={15} aria-hidden="true" /></Collapsible.Trigger>
+    <Collapsible.Panel className="terms-panel" keepMounted>
     <div className="term-group">首轮检索词<div className="chips">{planned.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>
     {snapshot.activeSearches.length > 0 && <div className="term-group">正在执行<div className="chips">{snapshot.activeSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
     {snapshot.executedSearches.length > 0 && <div className="term-group">已执行<div className="chips">{snapshot.executedSearches.map((term) => <span className="chip" key={term}>{term}</span>)}</div></div>}
     {snapshot.inactiveSearches.length > 0 && <div className="term-group">未命中检索词<div className="chips">{snapshot.inactiveSearches.map((term) => <span className="chip inactive" key={term}>{term}</span>)}</div></div>}
-    </details>
+    </Collapsible.Panel>
+    </Collapsible.Root>
   </>;
 }
 
@@ -217,8 +265,12 @@ export function SearchStatus({ snapshot, running, onStop }: {
   running: boolean;
   onStop(): void;
 }) {
+  const error = snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' || snapshot.finalRerank === 'failed';
   return <>
-    <p className={`status${snapshot.stopReason === 'failed' || snapshot.stopReason === 'model_timeout' || snapshot.finalRerank === 'failed' ? ' error' : ''}`} role="status">{snapshot.statusText}</p>
+    <div className={`status-row${error ? ' error' : ''}${running ? ' running' : ''}`} role="status">
+      {running ? <LoaderCircle size={14} className="spin" aria-hidden="true" /> : error ? <X size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
+      <span>{snapshot.statusText}</span>
+    </div>
     {running && <div className="run-actions"><button className="secondary" type="button" onClick={onStop}>
       {snapshot.phase === 'reranking' ? '取消最终列表重排' : '停止并查看结果'}
     </button></div>}
@@ -233,6 +285,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
   controller: SearchController;
 }) {
   const { query, snapshot } = state;
+  const inputRef = useRef<HTMLInputElement>(null);
   const setQuery = (value: string) => onState({ query: value });
   const setSnapshot = (next: SearchSnapshot) => onState({ snapshot: next });
   const running = snapshot.phase !== 'complete' && snapshot.round > 0;
@@ -273,25 +326,40 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
     controller.session?.stop('user_stopped');
   }
 
+  function fillExample(example: string) {
+    setQuery(example);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
   return <>
     <form className="search-form" onSubmit={search}>
-      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：找近两年的操作系统课程的讨论和资料" aria-label="自然语言查询" required />
-      <button className="primary">{running ? '开始新搜索' : '开始搜索'}</button>
+      <Search size={16} aria-hidden="true" />
+      <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="找课程、老师、资料或校园讨论…" aria-label="自然语言查询" required />
+      <button className="primary">{running ? '新搜索' : '搜索'}</button>
     </form>
-    <SearchStatus snapshot={snapshot} running={running} onStop={stop} />
+    {(snapshot.round > 0 || snapshot.query) && <SearchStatus snapshot={snapshot} running={running} onStop={stop} />}
     {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
+    {snapshot.round === 0 && !snapshot.query && <div className="empty-state">
+      <span className="empty-icon"><Search size={18} aria-hidden="true" /></span>
+      <h2>搜索校园里的真实讨论</h2>
+      <p>可以直接描述你想找什么，模型会迭代规划检索词。</p>
+      <div className="examples" aria-label="示例查询">
+        {['操作系统课程评价', '微积分历年卷', '紫金港租房讨论'].map((example) => <button type="button" key={example} onClick={() => fillExample(example)}>{example}</button>)}
+      </div>
+    </div>}
     <ResultLists
       results={snapshot.results}
       softIsolatedResults={snapshot.softIsolatedResults}
       outOfRangeCount={snapshot.outOfRangeCount}
-      emptyText={snapshot.phase === 'complete' && snapshot.stopReason === 'no_results' ? '没有找到主题帖。' : '结果将在这里逐轮出现。'}
+      emptyText={snapshot.phase === 'complete' && snapshot.stopReason === 'no_results' ? '没有找到相关主题' : '结果将在这里逐轮出现。'}
     />
+    {snapshot.round > 0 && <PrivacyDisclosure />}
   </>;
 }
 
 function ResultCard({ topic, rank }: { topic: import('./types').TopicCandidate; rank?: number }) {
   return <article className="result">
-    {rank !== undefined && <span className="rank">{rank}</span>}
+    {rank !== undefined && <span className="rank" aria-hidden="true">{rank}</span>}
     <div><h2><a href={topic.url} target="_blank" rel="noreferrer">{topic.title}</a></h2><p>{topic.board || '板块未知'} · {topic.author || '作者未知'} · {topic.time || '时间未知'} · {topic.replyCount} 条回复</p></div>
   </article>;
 }
@@ -303,12 +371,12 @@ export function ResultLists({ results, softIsolatedResults, outOfRangeCount, emp
   emptyText: string;
 }) {
   return <div aria-live="polite">
-    <p className="result-counts">主结果 {results.length} · 软隔离 {softIsolatedResults.length} · 时间范围外 {outOfRangeCount}</p>
+    {(results.length > 0 || softIsolatedResults.length > 0 || outOfRangeCount > 0) && <p className="result-counts"><strong>{results.length} 个结果</strong>{softIsolatedResults.length > 0 && ` · ${softIsolatedResults.length} 个已隐藏`}{outOfRangeCount > 0 && ` · ${outOfRangeCount} 个超出时间范围`}</p>}
     {results.length === 0
-      ? <div className="empty">{emptyText}</div>
+      ? <div className="empty">{emptyText === '结果将在这里逐轮出现。' ? '' : <><Search size={16} aria-hidden="true" /><span>{emptyText}</span></>}</div>
       : results.map((topic, index) => <ResultCard topic={topic} rank={index + 1} key={topic.id} />)}
     {softIsolatedResults.length > 0 && <details className="soft-isolated">
-      <summary>已隐藏的明确无关结果（{softIsolatedResults.length}）</summary>
+      <summary>已隐藏 {softIsolatedResults.length} 个低相关结果</summary>
       {softIsolatedResults.map((topic) => <ResultCard topic={topic} key={topic.id} />)}
     </details>}
   </div>;
@@ -329,18 +397,17 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
   return <>
     <style>{panelCss}</style>
     <button className="orb" type="button" aria-label="打开自然语言搜索" onClick={() => setOpen(true)}>
-      <span className="orb-mark">搜</span><span className="orb-dot" />
+      <Search size={20} aria-hidden="true" />
     </button>
     <aside className={`drawer${open ? ' open' : ''}`} aria-label="社区自然语言搜索" aria-hidden={!open}>
-      <div className="drawer-head"><div><p className="kicker">CAMPUS SEARCH</p><h1>找到真正相关的讨论</h1><p className="subtitle">模型规划检索词，当前站点返回候选，浏览器本地预排序。</p></div><button className="close" type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button></div>
-      <nav className="tabs" aria-label="功能切换">
-        <button className={`tab${tab === 'search' ? ' active' : ''}`} data-tab="search" type="button" onClick={() => setTab('search')}>搜索</button>
-        <button className={`tab${tab === 'settings' ? ' active' : ''}`} data-tab="settings" type="button" onClick={() => setTab('settings')}>模型设置</button>
-      </nav>
-      {tab === 'search'
-        ? <SearchPanel runtime={runtime} settings={settings} state={searchState} onState={(patch) => setSearchState((current) => ({ ...current, ...patch }))} controller={searchController.current} />
-        : <SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} />}
-      <p className="privacy">反馈轮只会向模型发送原生标题、时间、板块和回复数。作者只在本地结果卡片显示，不会发送给模型。正文派生标题仅在本地显示。正文、回帖和站点登录信息不会发送给模型。</p>
+      <header className="drawer-head"><div className="brand"><span className="brand-icon"><Search size={16} aria-hidden="true" /></span><div><h1>Campus Search</h1><p>语义搜索校园讨论</p></div></div><button className="close" type="button" aria-label="关闭" onClick={() => setOpen(false)}><X size={17} aria-hidden="true" /></button></header>
+      <Tabs.Root value={tab} onValueChange={(value) => setTab(value as 'search' | 'settings')} className="app-tabs">
+        <Tabs.List className="tabs" aria-label="功能切换"><Tabs.Tab value="search" data-tab="search" className="tab">搜索</Tabs.Tab><Tabs.Tab value="settings" data-tab="settings" className="tab"><Settings2 size={14} aria-hidden="true" />设置</Tabs.Tab></Tabs.List>
+        <main className="drawer-main">
+          <Tabs.Panel value="search" keepMounted className="tab-panel"><SearchPanel runtime={runtime} settings={settings} state={searchState} onState={(patch) => setSearchState((current) => ({ ...current, ...patch }))} controller={searchController.current} /></Tabs.Panel>
+          <Tabs.Panel value="settings" keepMounted className="tab-panel"><SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} /></Tabs.Panel>
+        </main>
+      </Tabs.Root>
     </aside>
   </>;
 }
