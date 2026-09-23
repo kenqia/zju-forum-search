@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 
-import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 
 const apiUrl = 'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421f1e748d22433310830079bab/topic/search?keyword=test&from=0&size=20';
@@ -14,7 +13,7 @@ describe('CC98 WebVPN page bridge', () => {
       return new Response('[]', { headers: { 'content-type': 'application/json' } });
     }) });
     try {
-      window.eval(await readFile('public/cc98-webvpn-bridge.js', 'utf8'));
+      await import('./webvpn-bridge');
       const request = (id: string, url = apiUrl) => new Promise<string>((resolve) => {
         const onResponse = (event: Event) => {
           const detail = (event as CustomEvent<string>).detail;

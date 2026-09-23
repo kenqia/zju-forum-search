@@ -1,6 +1,5 @@
-const REQUEST_EVENT = 'zju-forum-search:webvpn-request';
-const RESPONSE_EVENT = 'zju-forum-search:webvpn-response';
-const CANCEL_EVENT = 'zju-forum-search:webvpn-cancel';
+import { WEBVPN_CANCEL_EVENT, WEBVPN_REQUEST_EVENT, WEBVPN_RESPONSE_EVENT } from './webvpn-protocol';
+
 const RESPONSE_TIMEOUT_MS = 25_000;
 
 export function webVpnFetch(input: string, init?: RequestInit): Promise<Response> {
@@ -14,11 +13,11 @@ export function webVpnFetch(input: string, init?: RequestInit): Promise<Response
 
     const cleanup = () => {
       clearTimeout(timeout);
-      document.removeEventListener(RESPONSE_EVENT, onResponse);
+      document.removeEventListener(WEBVPN_RESPONSE_EVENT, onResponse);
       signal?.removeEventListener('abort', onAbort);
     };
     const onAbort = () => {
-      document.dispatchEvent(new CustomEvent(CANCEL_EVENT, { detail: id }));
+      document.dispatchEvent(new CustomEvent(WEBVPN_CANCEL_EVENT, { detail: id }));
       cleanup();
       reject(new DOMException('请求已取消', 'AbortError'));
     };
@@ -37,12 +36,12 @@ export function webVpnFetch(input: string, init?: RequestInit): Promise<Response
       }));
     };
     const timeout = setTimeout(() => {
-      document.dispatchEvent(new CustomEvent(CANCEL_EVENT, { detail: id }));
+      document.dispatchEvent(new CustomEvent(WEBVPN_CANCEL_EVENT, { detail: id }));
       cleanup();
       reject(new Error('WebVPN 搜索超时'));
     }, RESPONSE_TIMEOUT_MS);
-    document.addEventListener(RESPONSE_EVENT, onResponse);
+    document.addEventListener(WEBVPN_RESPONSE_EVENT, onResponse);
     signal?.addEventListener('abort', onAbort, { once: true });
-    document.dispatchEvent(new CustomEvent(REQUEST_EVENT, { detail: JSON.stringify({ id, url: input }) }));
+    document.dispatchEvent(new CustomEvent(WEBVPN_REQUEST_EVENT, { detail: JSON.stringify({ id, url: input }) }));
   });
 }

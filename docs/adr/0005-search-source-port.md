@@ -15,6 +15,7 @@ ADR-0004 把搜索定义为「模型规划 → 平台召回 → 本地重排 →
 
 - `SearchSourceAdapter`：无状态站点描述符，按 `id` 注册。声明 `capabilities`、`ratePolicy`、`pageMatches`、`apiHosts`（后两者供 manifest 消费）、`createSession(pageContext)`。
 - `SearchSourceSession`：每次页面/认证绑定的实例。token、cookie、CSRF 等认证材料只存在于 session 与 adapter 内部，不进 UI、不进 core。
+- 2026-09-23 补充 WebVPN 例外：CC98 映射页的短期授权留在 MAIN 环境页面脚本闭包内，由页面代发搜索。隔离环境的 session 不接收该授权。边界和回滚见 [ADR-0012](0012-cc98-webvpn-page-bridge.md)。
 - UI 只做 `sourceRegistry.resolve(location.href)` → `adapter.createSession(...)` → `new SearchSession({ planner, source })` 并以用户请求次数上限启动 `run(query, requestLimit)`。
 - 错误面：`SourceError extends Error`，`code: 'not_logged_in' | 'rate_limited' | 'permission_denied' | 'network' | 'invalid_response'`。adapter 负责把本站 HTTP 状态与异常翻译为 `SourceError`；**`AbortError` 不翻译、原样传播**，core 用 AbortError 驱动取消。core 不再出现 `cc98_limited` 这类站点名。
 

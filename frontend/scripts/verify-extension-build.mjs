@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { JSDOM, VirtualConsole } from 'jsdom';
 
-const outputFiles = ['content.js', 'background.js'];
+const outputFiles = ['content.js', 'background.js', 'cc98-webvpn-bridge.js'];
 const forbiddenPatterns = [
   {
     pattern: /process\.env\.NODE_ENV/,
@@ -106,5 +106,37 @@ if (actionMessage?.tabId !== 7 || actionMessage.message?.type !== 'ui:open') {
   throw new Error('点击扩展图标未能向当前标签页发送打开消息');
 }
 workerDom.window.close();
+
+const bridgeDom = new JSDOM('', {
+  url: 'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421e7e056d22433310830079bab/',
+  runScripts: 'outside-only',
+});
+const bridgeCalls = [];
+Object.assign(bridgeDom.window, {
+  Headers, Request,
+  fetch: async (url, init) => {
+    bridgeCalls.push({ url, authorization: new Headers(init?.headers).get('Authorization') });
+    return new Response('[]', { headers: { 'content-type': 'application/json' } });
+  },
+});
+bridgeDom.window.eval(await readFile(resolve('dist', 'cc98-webvpn-bridge.js'), 'utf8'));
+await bridgeDom.window.fetch('https://api.cc98.org/me', { headers: { Authorization: 'Bearer synthetic-only' } });
+const bridgeResponse = new Promise((resolvePromise, rejectPromise) => {
+  const timeout = setTimeout(() => rejectPromise(new Error('WebVPN 构建产物未响应搜索请求')), 1000);
+  bridgeDom.window.document.addEventListener('zju-forum-search:webvpn-response', (event) => {
+    clearTimeout(timeout);
+    resolvePromise(JSON.parse(event.detail));
+  }, { once: true });
+});
+bridgeDom.window.document.dispatchEvent(new bridgeDom.window.CustomEvent('zju-forum-search:webvpn-request', {
+  detail: JSON.stringify({
+    id: 'build-smoke',
+    url: 'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421f1e748d22433310830079bab/topic/search?keyword=test&from=0&size=20',
+  }),
+}));
+if ((await bridgeResponse).status !== 200 || bridgeCalls[1]?.authorization !== 'Bearer synthetic-only') {
+  throw new Error('WebVPN 构建产物未能复用合成授权执行搜索');
+}
+bridgeDom.window.close();
 
 console.log('扩展构建产物检查通过');
