@@ -19,6 +19,13 @@ describe('source registry', () => {
   it('resolves Duo pages without reading login material', () => {
     expect(sourceRegistry.resolve('https://www.duoduo.link/a/123')?.id).toBe('duo');
   });
+  it('resolves only the CC98 WebVPN path', () => {
+    const base = 'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421e7e056d22433310830079bab/';
+    expect(sourceRegistry.resolve(base)?.id).toBe('cc98');
+    expect(sourceRegistry.resolve(`${base}topic/123`)?.id).toBe('cc98');
+    expect(sourceRegistry.resolve('https://webvpn.zju.edu.cn/login')).toBeUndefined();
+    expect(sourceRegistry.resolve('https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421f1e748d22433310830079bab/')).toBeUndefined();
+  });
   it.each(['https://www.duoduo.link.evil.test/', 'http://www.duoduo.link/', 'https://www.cc98.org.evil.test/', 'http://www.cc98.org/', 'https://example.com/', 'invalid'])('ignores unsupported page %s', (url) => {
     expect(sourceRegistry.resolve(url)).toBeUndefined();
   });

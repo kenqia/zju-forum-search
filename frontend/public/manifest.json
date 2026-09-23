@@ -2,13 +2,17 @@
   "manifest_version": 3,
   "name": "浙大社区自然语言搜索",
   "version": "0.2.0",
-  "description": "在 CC98 和朵朵校友圈页面内用自然语言迭代检索帖子。",
+  "description": "在 CC98 用自然语言检索帖子；朵朵校友圈仍在适配。",
+  "action": {
+    "default_title": "打开社区自然语言搜索"
+  },
   "permissions": [
     "storage"
   ],
   "host_permissions": [
     "https://api.cc98.org/*",
-    "https://api.duoduo.link/*"
+    "https://api.duoduo.link/*",
+    "https://webvpn.zju.edu.cn/*"
   ],
   "optional_host_permissions": [
     "https://*/*",
@@ -21,13 +25,24 @@
     {
       "matches": [
         "https://www.cc98.org/*",
-        "https://www.duoduo.link/*"
+        "https://www.duoduo.link/*",
+        "https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421e7e056d22433310830079bab/*"
       ],
       "js": [
         "content.js"
       ],
       "run_at": "document_idle",
       "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421e7e056d22433310830079bab/*"
+      ],
+      "js": [
+        "cc98-webvpn-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ]
 }

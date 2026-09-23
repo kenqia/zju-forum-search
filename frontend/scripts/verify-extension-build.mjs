@@ -25,60 +25,60 @@ const browserErrors = [];
 const virtualConsole = new VirtualConsole();
 virtualConsole.on('error', (error) => browserErrors.push(String(error)));
 virtualConsole.on('jsdomError', (error) => browserErrors.push(String(error)));
-const dom = new JSDOM('<!doctype html><html><body></body></html>', {
-  url: 'https://www.cc98.org/',
-  runScripts: 'outside-only',
-  pretendToBeVisual: true,
-  virtualConsole,
-});
-dom.window.chrome = {
-  runtime: {
-    sendMessage(_message, callback) {
-      callback({
-        ok: true,
-        settings: {
-          llmBaseUrl: 'https://models.example.com/v1',
-          llmApiKey: '',
-          llmModel: 'test-model',
-          searchRequestLimit: 30,
-          feedbackEvidenceLimit: 30,
-          finalRerankEnabled: true,
-          finalRerankTopM: 30,
-          searchBudgetSeconds: 60,
-          hasApiKey: false,
-        },
-      });
-    },
-  },
-};
-
-// Production uses a closed root. The smoke test opens it only so it can assert
-// that the bundled content script rendered and the interaction is wired.
-const attachShadow = dom.window.Element.prototype.attachShadow;
-dom.window.Element.prototype.attachShadow = function attachInspectableShadow(init) {
-  return attachShadow.call(this, { ...init, mode: 'open' });
-};
-
 const contentSource = await readFile(resolve('dist', 'content.js'), 'utf8');
-dom.window.eval(contentSource);
-await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+for (const url of ['https://www.cc98.org/', 'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421e7e056d22433310830079bab/', 'https://www.duoduo.link/']) {
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+    url, runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole,
+  });
+  let contentListener;
+  dom.window.chrome = {
+    runtime: {
+      onMessage: {
+        addListener(listener) { contentListener = listener; },
+        removeListener(listener) { if (contentListener === listener) contentListener = undefined; },
+      },
+      sendMessage(_message, callback) {
+        callback({ ok: true, settings: {
+          llmBaseUrl: 'https://models.example.com/v1', llmApiKey: '', llmModel: 'test-model',
+          searchRequestLimit: 30, feedbackEvidenceLimit: 30, finalRerankEnabled: true,
+          finalRerankTopM: 30, searchBudgetSeconds: 60, hasApiKey: false,
+        } });
+      },
+    },
+  };
 
-const host = dom.window.document.getElementById('zju-forum-search-extension');
-const orb = host?.shadowRoot?.querySelector('button.orb');
-orb?.click();
-await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
-const drawer = host?.shadowRoot?.querySelector('aside.drawer');
+  // Production uses a closed root. Inspect the bundled UI in the smoke test.
+  const attachShadow = dom.window.Element.prototype.attachShadow;
+  dom.window.Element.prototype.attachShadow = function attachInspectableShadow(init) {
+    return attachShadow.call(this, { ...init, mode: 'open' });
+  };
 
-if ('process' in dom.window) throw new Error('浏览器烟雾测试意外暴露了 Node process 全局');
-if (!host || !orb) throw new Error('content.js 未能挂载 98 悬浮球');
-if (!drawer?.classList.contains('open')) throw new Error('点击 98 悬浮球后侧栏没有展开');
+  dom.window.eval(contentSource);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+  const host = dom.window.document.getElementById('zju-forum-search-extension');
+  const orb = host?.shadowRoot?.querySelector('button.orb');
+  if (!host || !orb || typeof contentListener !== 'function') throw new Error(`${url} 内容脚本未能挂载`);
+  contentListener({ type: 'ui:open' });
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  const drawer = host.shadowRoot.querySelector('aside.drawer');
+  if (!drawer?.classList.contains('open')) throw new Error(`${url} 扩展图标消息未能打开侧栏`);
+  host.shadowRoot.querySelector('button.close')?.click();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  orb.click();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  if (!drawer.classList.contains('open')) throw new Error(`${url} 悬浮球未能打开侧栏`);
+  if ('process' in dom.window) throw new Error('浏览器烟雾测试意外暴露了 Node process 全局');
+  dom.window.close();
+}
 if (browserErrors.length > 0) throw new Error(`content.js 运行时错误：${browserErrors.join('; ')}`);
 
-dom.window.close();
-
 let registeredMessageListener;
+let registeredActionClick;
+let actionMessage;
 const workerDom = new JSDOM('', { runScripts: 'outside-only' });
 workerDom.window.chrome = {
+  action: { onClicked: { addListener(listener) { registeredActionClick = listener; } } },
+  tabs: { sendMessage(tabId, message, callback) { actionMessage = { tabId, message }; callback(); } },
   runtime: {
     onMessage: {
       addListener(listener) {
@@ -99,6 +99,11 @@ workerDom.window.chrome = {
 workerDom.window.eval(await readFile(resolve('dist', 'background.js'), 'utf8'));
 if (typeof registeredMessageListener !== 'function') {
   throw new Error('background.js 未能注册 runtime.onMessage 监听器');
+}
+if (typeof registeredActionClick !== 'function') throw new Error('background.js 未能注册扩展图标点击事件');
+registeredActionClick({ id: 7 });
+if (actionMessage?.tabId !== 7 || actionMessage.message?.type !== 'ui:open') {
+  throw new Error('点击扩展图标未能向当前标签页发送打开消息');
 }
 workerDom.window.close();
 

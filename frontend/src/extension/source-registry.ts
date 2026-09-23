@@ -10,9 +10,9 @@ export const sourceRegistry = {
     let url: URL;
     try { url = new URL(pageUrl); } catch { return undefined; }
     return adapters.find((adapter) => adapter.pageMatches.some((pattern) => {
-      // Registered patterns currently cover every path of one exact HTTPS host.
-      const origin = pattern.endsWith('/*') ? pattern.slice(0, -2) : null;
-      return origin === url.origin;
+      if (!pattern.endsWith('/*')) return false;
+      const base = new URL(pattern.slice(0, -1));
+      return base.origin === url.origin && url.pathname.startsWith(base.pathname);
     }));
   },
 };

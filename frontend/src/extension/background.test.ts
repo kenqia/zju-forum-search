@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createMessageHandler, type BackgroundDependencies } from './background';
+import { createMessageHandler, registerActionClick, type BackgroundDependencies } from './background';
 import { DEFAULT_SETTINGS } from './types';
 
 function harness(overrides: Partial<BackgroundDependencies> = {}) {
@@ -30,6 +30,21 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
 }
 
 describe('background message boundary', () => {
+  it('routes the extension icon click to the current tab', () => {
+    let onClicked: ((tab: { id?: number }) => void) | undefined;
+    const sendMessage = vi.fn((_tabId: number, _message: unknown, callback: () => void) => callback());
+    registerActionClick({
+      action: { onClicked: { addListener: (listener) => { onClicked = listener; } } },
+      tabs: { sendMessage },
+      runtime: {},
+    });
+
+    onClicked?.({ id: 7 });
+    expect(sendMessage).toHaveBeenCalledWith(7, { type: 'ui:open' }, expect.any(Function));
+    onClicked?.({});
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
   it.each([undefined, { searchSurface: 'unsupported', querySyntax: 'plain-keyword', resultOrdering: 'other' },
     { searchSurface: ['title'], querySyntax: 'boolean', resultOrdering: 'other' }, { searchSurface: 'title', querySyntax: 'sql', resultOrdering: 'other' },
   ])('rejects invalid capabilities before calling the model: %j', (capabilities) => {
@@ -264,6 +279,8 @@ describe('registered page message senders', () => {
   it('accepts both registered sources and rejects lookalike or unsupported origins', async () => {
     const addListener = vi.fn();
     vi.stubGlobal('chrome', {
+      action: { onClicked: { addListener: vi.fn() } },
+      tabs: { sendMessage: vi.fn() },
       runtime: { onMessage: { addListener } },
       storage: { local: { get: (_key: string, callback: (value: object) => void) => callback({}) } },
     });
@@ -271,12 +288,12 @@ describe('registered page message senders', () => {
       vi.resetModules();
       await import('./background');
       const listener = addListener.mock.calls[0][0];
-      for (const url of ['https://www.cc98.org/topic/1', 'https://www.duoduo.link/a/1']) {
+      for (const url of ['https://www.cc98.org/topic/1', 'https://www.duoduo.link/a/1', 'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421e7e056d22433310830079bab/topic/1']) {
         const reply = vi.fn();
         expect(listener({ type: 'settings:get' }, { url }, reply)).toBe(true);
         await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(expect.objectContaining({ ok: true })));
       }
-      for (const url of [undefined, 'http://www.duoduo.link/', 'https://www.duoduo.link.evil.test/', 'https://example.test/']) {
+      for (const url of [undefined, 'http://www.duoduo.link/', 'https://www.duoduo.link.evil.test/', 'https://webvpn.zju.edu.cn/login', 'https://example.test/']) {
         const reply = vi.fn();
         expect(listener({ type: 'settings:get' }, { url }, reply)).toBe(false);
         expect(reply).not.toHaveBeenCalled();

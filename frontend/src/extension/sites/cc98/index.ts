@@ -10,8 +10,12 @@ import {
   type SourceCapabilities,
 } from '../../types';
 import { normalizeText } from '../../text';
+import { webVpnFetch } from './webvpn-transport';
 
 const PAGE_SIZE = 20;
+const CC98_API_BASE = 'https://api.cc98.org';
+export const CC98_WEBVPN_PAGE_BASE = 'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421e7e056d22433310830079bab';
+const CC98_WEBVPN_API_BASE = 'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421f1e748d22433310830079bab';
 
 export const CC98_RATE_POLICY: RatePolicy = {
   maxSearchCalls: 100,
@@ -47,13 +51,14 @@ function topicList(payload: unknown): unknown[] {
   return items;
 }
 
-function toSearchHit(value: unknown, position: number): SearchHit | null {
+function toSearchHit(value: unknown, position: number, webVpn: boolean): SearchHit | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const id = normalizeText(raw.id ?? raw.topicId ?? raw.topic_id);
   if (!id) return null;
   const rawUrl = normalizeText(raw.url ?? raw.link);
-  const url = rawUrl.startsWith('https://www.cc98.org/') ? rawUrl : `https://www.cc98.org/topic/${encodeURIComponent(id)}`;
+  const url = webVpn ? `${CC98_WEBVPN_PAGE_BASE}/topic/${encodeURIComponent(id)}`
+    : rawUrl.startsWith('https://www.cc98.org/') ? rawUrl : `https://www.cc98.org/topic/${encodeURIComponent(id)}`;
   const title = normalizeText(raw.title ?? raw.subject) || `主题 ${id}`;
   const section = normalizeText(raw.boardName ?? raw.board ?? raw.boardId);
   const publishedAt = normalizeText(raw.time ?? raw.postTime ?? raw.createTime);
@@ -75,27 +80,30 @@ function toSearchHit(value: unknown, position: number): SearchHit | null {
 
 export class Cc98Client {
   constructor(
-    private readonly accessToken: string,
+    private readonly accessToken: string | null,
     private readonly fetch: FetchLike = (input, init) => globalThis.fetch(input, init),
+    private readonly apiBase = CC98_API_BASE,
   ) {}
 
   async searchTopics(query: string, from: number, size: number, signal?: AbortSignal): Promise<unknown> {
     const parameters = new URLSearchParams({ keyword: query, from: String(from), size: String(size) });
     let response: Response;
     try {
-      response = await this.fetch(`https://api.cc98.org/topic/search?${parameters}`, {
+      response = await this.fetch(`${this.apiBase}/topic/search?${parameters}`, {
         method: 'GET',
         credentials: 'include',
         redirect: 'follow',
         signal,
-        headers: { Authorization: this.accessToken, Accept: 'application/json' },
+        headers: { ...(this.accessToken && { Authorization: this.accessToken }), Accept: 'application/json' },
       });
     } catch (error) {
       if (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError') throw error;
       throw new SourceError('无法连接 CC98，保留当前部分结果。', 'network');
     }
     if (response.status === 401) {
-      throw new SourceError('请先登录 CC98，然后刷新页面再试。', 'not_logged_in');
+      throw new SourceError(this.apiBase === CC98_WEBVPN_API_BASE
+        ? '扩展未能复用 WebVPN 页面中的 CC98 登录态。请使用校园网或 RVPN 直连。'
+        : '请先登录 CC98，然后刷新页面再试。', 'not_logged_in');
     }
     if (response.status === 403 || response.status === 429) {
       throw new SourceError(`CC98 暂时限制了搜索请求（HTTP ${response.status}），保留当前部分结果。`, 'rate_limited');
@@ -118,8 +126,8 @@ export class Cc98SourceSession implements SearchSourceSession {
   readonly capabilities = CC98_CAPABILITIES;
   private readonly client: Cc98Client;
 
-  constructor(accessToken: string, fetchFn?: FetchLike) {
-    this.client = new Cc98Client(accessToken, fetchFn);
+  constructor(accessToken: string | null, fetchFn?: FetchLike, private readonly webVpn = false) {
+    this.client = new Cc98Client(accessToken, fetchFn, webVpn ? CC98_WEBVPN_API_BASE : CC98_API_BASE);
   }
 
   async search(query: string, cursor: string | undefined, signal?: AbortSignal): Promise<SearchPage> {
@@ -131,7 +139,7 @@ export class Cc98SourceSession implements SearchSourceSession {
     const payload = await this.client.searchTopics(query, from, PAGE_SIZE, signal);
     const items = topicList(payload);
     const hits = items
-      .map((raw, index) => toSearchHit(raw, from + index + 1))
+      .map((raw, index) => toSearchHit(raw, from + index + 1, this.webVpn))
       .filter((hit): hit is SearchHit => hit !== null);
     // Every non-empty raw page may have another page. Advance by the raw response
     // length so malformed records cannot overlap or skip offsets.
@@ -146,10 +154,12 @@ export const cc98Adapter: SearchSourceAdapter = {
   id: 'cc98',
   capabilities: CC98_CAPABILITIES,
   ratePolicy: CC98_RATE_POLICY,
-  pageMatches: ['https://www.cc98.org/*'],
-  apiHosts: ['https://api.cc98.org/*'],
+  pageMatches: ['https://www.cc98.org/*', `${CC98_WEBVPN_PAGE_BASE}/*`],
+  apiHosts: ['https://api.cc98.org/*', 'https://webvpn.zju.edu.cn/*'],
   createSession(pageContext: PageContext): SearchSourceSession {
-    void pageContext;
+    if (pageContext.url.startsWith(`${CC98_WEBVPN_PAGE_BASE}/`)) {
+      return new Cc98SourceSession(null, webVpnFetch, true);
+    }
     const token = readCc98AccessToken(localStorage);
     if (!token) throw new SourceError('请先登录 CC98，然后刷新页面再试。', 'not_logged_in');
     return new Cc98SourceSession(token);

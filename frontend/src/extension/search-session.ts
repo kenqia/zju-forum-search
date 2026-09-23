@@ -9,6 +9,7 @@ import { applyFinalRerankPlan, createFinalRerankSelection, type FinalRerankSelec
 import { PaginationCursorGuard, pagePredatesStart } from './pagination';
 import {
   SourceError,
+  DEFAULT_SETTINGS,
   type FeedbackPlan,
   type ModelQueryPlan,
   type PlannedSearch,
@@ -131,7 +132,7 @@ export class SearchSession {
     this.onUpdate = dependencies.onUpdate;
     this.finalRerankEnabled = dependencies.finalRerankEnabled ?? true;
     this.finalRerankTopM = dependencies.finalRerankTopM ?? 30;
-    this.modelSearchNarrowingEnabled = dependencies.modelSearchNarrowingEnabled ?? true;
+    this.modelSearchNarrowingEnabled = dependencies.modelSearchNarrowingEnabled ?? DEFAULT_SETTINGS.modelSearchNarrowingEnabled;
   }
 
   stop(reason: 'user_stopped' | 'replaced' = 'user_stopped'): void {

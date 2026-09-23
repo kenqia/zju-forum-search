@@ -36,6 +36,14 @@ describe('source registry / manifest contract', () => {
     expectManifestCoverage(sourceRegistry.adapters, manifest);
   });
 
+  it('limits the WebVPN page bridge to the CC98 mapping', () => {
+    const bridge = manifest.content_scripts.find((script) => script.js.includes('cc98-webvpn-bridge.js'));
+    expect(bridge).toMatchObject({ run_at: 'document_start', world: 'MAIN' });
+    expect(bridge?.matches).toEqual([
+      'https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421e7e056d22433310830079bab/*',
+    ]);
+  });
+
   it('rejects a new adapter whose page matches are missing', () => {
     const permissions = manifestWithAdditionalSource();
     permissions.content_scripts = manifest.content_scripts;

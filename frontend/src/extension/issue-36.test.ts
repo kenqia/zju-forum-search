@@ -24,7 +24,7 @@ function feedback(overrides: Partial<FeedbackPlan> = {}): FeedbackPlan {
 }
 
 describe('Issue #36 model search narrowing setting', () => {
-  it('keeps the existing stop behavior enabled by default', async () => {
+  it('keeps the stop behavior when explicitly enabled', async () => {
     const calls: string[] = [];
     const planFeedback = vi.fn().mockResolvedValue(feedback({
       judgments: [{ key: 'c0', grade: 2 }],
@@ -36,10 +36,31 @@ describe('Issue #36 model search narrowing setting', () => {
       source: source(async (query) => { calls.push(query); return { hits: [hit('c0')], nextCursor: 'next' }; }),
       sleep: async () => undefined,
       finalRerankEnabled: false,
+      modelSearchNarrowingEnabled: true,
     }).run('资料', 10);
 
     expect(calls).toEqual(['原词']);
     expect(result.stopReason).toBe('model_stop');
+  });
+
+  it('ignores model stop suggestions when the session setting is omitted', async () => {
+    const calls: string[] = [];
+    const result = await new SearchSession({
+      planner: { planFirstRound: async () => plan, planFeedback: async () => feedback({
+        judgments: [{ key: 'c0', grade: 2 }],
+        stopQueries: [{ query: '原词', reason: '应被忽略' }],
+        shouldStop: true,
+      }) },
+      source: source(async (_query, cursor) => {
+        calls.push(cursor ?? 'first');
+        return cursor ? { hits: [] } : { hits: [hit('c0')], nextCursor: '1' };
+      }),
+      sleep: async () => undefined,
+      finalRerankEnabled: false,
+    }).run('资料', 10);
+
+    expect(calls).toEqual(['first', '1']);
+    expect(result.stopReason).not.toBe('model_stop');
   });
 
   it('ignores both stop signals while preserving valid expansion and pagination', async () => {

@@ -49,7 +49,7 @@ describe('issue #25 retrieval waves', () => {
       }),
     };
 
-    const result = await new SearchSession({ planner, source, sleep: async () => undefined, finalRerankEnabled: false }).run('资料', 20, 30);
+    const result = await new SearchSession({ planner, source, sleep: async () => undefined, finalRerankEnabled: false, modelSearchNarrowingEnabled: true }).run('资料', 20, 30);
 
     expect(calls.slice(0, 5)).toEqual(['首词:first', '次词:first', '新词:first', '首词:page-2', '次词:page-2']);
     expect(feedbackCalls[0].searchLedger).toHaveLength(2);

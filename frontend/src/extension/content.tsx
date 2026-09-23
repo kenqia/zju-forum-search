@@ -11,11 +11,16 @@ import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionF
 
 export interface RuntimeMessenger {
   send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
+  onOpenRequested?(listener: () => void): () => void;
 }
 
 interface ChromeRuntime {
   lastError?: { message?: string };
   sendMessage(message: unknown, callback: (response: Record<string, unknown>) => void): void;
+  onMessage: {
+    addListener(listener: (message: unknown) => void): void;
+    removeListener(listener: (message: unknown) => void): void;
+  };
 }
 
 function chromeMessenger(runtime: ChromeRuntime): RuntimeMessenger {
@@ -26,6 +31,13 @@ function chromeMessenger(runtime: ChromeRuntime): RuntimeMessenger {
         else resolve((response ?? {}) as ExtensionResponseFor<Request>);
       });
     }),
+    onOpenRequested: (listener) => {
+      const onMessage = (message: unknown) => {
+        if (message && typeof message === 'object' && (message as { type?: unknown }).type === 'ui:open') listener();
+      };
+      runtime.onMessage.addListener(onMessage);
+      return () => runtime.onMessage.removeListener(onMessage);
+    },
   };
 }
 
@@ -40,7 +52,7 @@ class BackgroundPlanner implements SearchPlanner {
   constructor(
     private readonly runtime: RuntimeMessenger,
     private readonly capabilities: SourceCapabilities,
-    private readonly modelSearchNarrowingEnabled = true,
+    private readonly modelSearchNarrowingEnabled: boolean,
   ) {}
   private withCancellation<T>(response: Promise<T>, requestId: string, signal?: AbortSignal): Promise<T> {
     if (!signal) return response;
@@ -92,7 +104,7 @@ class BackgroundPlanner implements SearchPlanner {
   }
 }
 
-export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities: SourceCapabilities, modelSearchNarrowingEnabled = true): SearchPlanner {
+export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities: SourceCapabilities, modelSearchNarrowingEnabled = DEFAULT_SETTINGS.modelSearchNarrowingEnabled): SearchPlanner {
   return new BackgroundPlanner(runtime, capabilities, modelSearchNarrowingEnabled);
 }
 
@@ -344,7 +356,7 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
       <h2>搜索校园里的真实讨论</h2>
       <p>可以直接描述你想找什么，模型会迭代规划检索词。</p>
       <div className="examples" aria-label="示例查询">
-        {['操作系统课程评价', '微积分历年卷', '紫金港租房讨论'].map((example) => <button type="button" key={example} onClick={() => fillExample(example)}>{example}</button>)}
+        {['操作系统课程评价', '近两年的微积分历年卷', '紫金港租房讨论'].map((example) => <button type="button" key={example} onClick={() => fillExample(example)}>{example}</button>)}
       </div>
     </div>}
     <ResultLists
@@ -393,6 +405,7 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
       if (response.ok) setSettings(response.settings);
     }).catch(() => undefined);
   }, [runtime]);
+  useEffect(() => runtime.onOpenRequested?.(() => setOpen(true)), [runtime]);
 
   return <>
     <style>{panelCss}</style>

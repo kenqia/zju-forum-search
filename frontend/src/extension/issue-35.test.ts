@@ -86,7 +86,7 @@ describe('Issue #35 stop_queries continuation protocol', () => {
         ...plan,
         searches: [...plan.searches, { query: '已经耗尽', purpose: '', role: 'balanced' }],
       }), planFeedback },
-      source: source(search), sleep: async () => undefined, finalRerankEnabled: false,
+      source: source(search), sleep: async () => undefined, finalRerankEnabled: false, modelSearchNarrowingEnabled: true,
     }).run('资料', 10);
 
     expect(calls).toEqual([

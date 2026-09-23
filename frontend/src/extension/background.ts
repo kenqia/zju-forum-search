@@ -28,6 +28,12 @@ function publicSettings(settings: ExtensionSettings) {
 }
 
 interface ChromeApi {
+  action: {
+    onClicked: { addListener(listener: (tab: { id?: number }) => void): void };
+  };
+  tabs: {
+    sendMessage(tabId: number, message: unknown, callback: () => void): void;
+  };
   runtime: {
     lastError?: { message?: string };
     onMessage: { addListener(listener: (message: unknown, sender: unknown, sendResponse: SendResponse) => boolean): void };
@@ -41,6 +47,16 @@ interface ChromeApi {
   permissions: {
     request(value: { origins: string[] }, callback: (granted: boolean) => void): void;
   };
+}
+
+export function registerActionClick(chromeApi: Pick<ChromeApi, 'action' | 'tabs'> & { runtime: Pick<ChromeApi['runtime'], 'lastError'> }): void {
+  chromeApi.action.onClicked.addListener((tab) => {
+    if (typeof tab.id !== 'number') return;
+    chromeApi.tabs.sendMessage(tab.id, { type: 'ui:open' }, () => {
+      // Pages without this extension's content script have no receiver.
+      void chromeApi.runtime.lastError;
+    });
+  });
 }
 
 function isSourceCapabilities(value: unknown): value is SourceCapabilities {
@@ -249,6 +265,7 @@ function browserDependencies(chromeApi: ChromeApi): BackgroundDependencies {
 
 const chromeApi = (globalThis as typeof globalThis & { chrome?: ChromeApi }).chrome;
 if (chromeApi) {
+  registerActionClick(chromeApi);
   const handler = createMessageHandler(browserDependencies(chromeApi));
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const senderUrl = (sender as { url?: unknown } | undefined)?.url;

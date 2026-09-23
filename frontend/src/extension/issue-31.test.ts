@@ -34,7 +34,7 @@ function source(search: SearchSourceSession['search']): SearchSourceSession {
 }
 
 function session(planner: SearchPlanner, search: SearchSourceSession['search']) {
-  return new SearchSession({ planner, source: source(search), sleep: async () => undefined, finalRerankEnabled: false });
+  return new SearchSession({ planner, source: source(search), sleep: async () => undefined, finalRerankEnabled: false, modelSearchNarrowingEnabled: true });
 }
 
 describe('Issue #31 unified no-positive-signal rescue', () => {

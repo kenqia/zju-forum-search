@@ -810,6 +810,7 @@ describe('最终列表重排', () => {
       },
       source: makeSource(12), sleep: async () => undefined,
       finalRerankTopM: 10,
+      modelSearchNarrowingEnabled: true,
     });
     const result = await session.run('资料', 30);
     expect(rerankResults).toHaveBeenCalledOnce();

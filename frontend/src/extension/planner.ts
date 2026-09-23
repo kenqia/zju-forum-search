@@ -334,7 +334,10 @@ function sourceInstructions(capabilities: SourceCapabilities): string {
     'plain-keyword': '只生成可直接提交的普通关键词，不使用布尔运算符或假设接口支持高级查询语法。',
     boolean: '接口支持布尔查询语法；仅在需要表达检索逻辑时使用布尔运算符，不假设支持其他高级语法。',
   } satisfies Record<SourceCapabilities['querySyntax'], string>;
-  return `${surface[capabilities.searchSurface]}\n${syntax[capabilities.querySyntax]}`;
+  const titleKeywordSpacing = capabilities.searchSurface === 'title' && capabilities.querySyntax === 'plain-keyword'
+    ? '\n组合检索词优先用空格分隔独立概念，例如“微积分 历年 试卷”，不要连写成“微积分历年试卷”。保留“微积分”“期末考试”“回忆卷”等完整词，不要逐字拆开；单个核心词无需空格。query 中的空格会原样提交给搜索接口，不只是界面排版。'
+    : '';
+  return `${surface[capabilities.searchSurface]}\n${syntax[capabilities.querySyntax]}${titleKeywordSpacing}`;
 }
 
 export function firstRoundSystemPrompt(capabilities: SourceCapabilities): string {

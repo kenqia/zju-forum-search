@@ -262,7 +262,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   llmModel: 'qwen3.8-27b',
   searchRequestLimit: 30,
   feedbackEvidenceLimit: 30,
-  modelSearchNarrowingEnabled: true,
+  modelSearchNarrowingEnabled: false,
   finalRerankEnabled: true,
   finalRerankTopM: 30,
   searchBudgetSeconds: 60,

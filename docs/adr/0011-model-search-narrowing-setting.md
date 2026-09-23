@@ -10,7 +10,9 @@
 
 ## 决定
 
-在现有模型设置中增加 `modelSearchNarrowingEnabled`，默认值为 `true`。缺失、非布尔或无效的旧值都规范化为 `true`，以保持升级前行为。
+在现有模型设置中增加 `modelSearchNarrowingEnabled`。初始默认值为 `true`，缺失或无效的旧值也按开启处理。
+
+2026-09-23 调整默认值为 `false`。新安装以及缺失或无效的旧设置默认关闭；用户已保存的布尔值保持原样。
 
 搜索创建 `SearchSession` 时读取一次该值，作为整个运行的固定快照。关闭时：
 

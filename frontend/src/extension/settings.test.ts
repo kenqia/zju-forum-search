@@ -16,7 +16,7 @@ describe('extension settings', () => {
       llmModel: 'qwen-test',
       searchRequestLimit: 100,
       feedbackEvidenceLimit: 30,
-      modelSearchNarrowingEnabled: true,
+      modelSearchNarrowingEnabled: false,
       finalRerankEnabled: true,
       finalRerankTopM: 30,
       searchBudgetSeconds: 300,
@@ -29,11 +29,12 @@ describe('extension settings', () => {
     expect(normalizeSettings({ searchBudgetSeconds: 45 }).searchRequestLimit).toBe(30);
   });
 
-  it('defaults model search narrowing on and rejects invalid stored values', () => {
-    expect(normalizeSettings({}).modelSearchNarrowingEnabled).toBe(true);
+  it('defaults model search narrowing off and rejects invalid stored values', () => {
+    expect(normalizeSettings({}).modelSearchNarrowingEnabled).toBe(false);
+    expect(normalizeSettings({ modelSearchNarrowingEnabled: true }).modelSearchNarrowingEnabled).toBe(true);
     expect(normalizeSettings({ modelSearchNarrowingEnabled: false }).modelSearchNarrowingEnabled).toBe(false);
     for (const value of [null, 'false', 0, {}, []]) {
-      expect(normalizeSettings({ modelSearchNarrowingEnabled: value as boolean }).modelSearchNarrowingEnabled).toBe(true);
+      expect(normalizeSettings({ modelSearchNarrowingEnabled: value as boolean }).modelSearchNarrowingEnabled).toBe(false);
     }
   });
 

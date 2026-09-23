@@ -1,6 +1,8 @@
+// @vitest-environment jsdom
+
 import { describe, expect, it, vi } from 'vitest';
 
-import { CC98_RATE_POLICY, Cc98Client, Cc98SourceSession, readCc98AccessToken } from './index';
+import { CC98_RATE_POLICY, CC98_WEBVPN_PAGE_BASE, Cc98Client, Cc98SourceSession, cc98Adapter, readCc98AccessToken } from './index';
 
 describe('CC98 browser adapter', () => {
   it('allows the full user-configurable request range', () => {
@@ -32,6 +34,41 @@ describe('CC98 browser adapter', () => {
       credentials: 'include',
       headers: { Authorization: 'Bearer fake-cc98-token', Accept: 'application/json' },
     });
+  });
+
+  it('uses the WebVPN API path and keeps result links inside WebVPN', async () => {
+    const fetch = vi.fn(async (_input: string, _init?: RequestInit) => new Response(JSON.stringify([{ id: 123, title: '合成主题' }]), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    const session = new Cc98SourceSession('Bearer synthetic', fetch, true);
+
+    const page = await session.search('高数', undefined);
+
+    expect(fetch.mock.calls[0][0]).toBe('https://webvpn.zju.edu.cn/https/77726476706e69737468656265737421f1e748d22433310830079bab/topic/search?keyword=%E9%AB%98%E6%95%B0&from=0&size=20');
+    expect(page.hits[0].candidate.url).toBe(`${CC98_WEBVPN_PAGE_BASE}/topic/123`);
+  });
+
+  it('selects WebVPN transport from the mapped CC98 page URL', async () => {
+    const getItem = vi.fn(() => { throw new Error('WebVPN session must not read isolated storage'); });
+    vi.stubGlobal('localStorage', { getItem });
+    let requestedUrl = '';
+    const onRequest = (event: Event) => {
+      const { id, url } = JSON.parse((event as CustomEvent<string>).detail);
+      requestedUrl = url;
+      document.dispatchEvent(new CustomEvent('zju-forum-search:webvpn-response', {
+        detail: JSON.stringify({ id, status: 200, contentType: 'application/json', body: '[]' }),
+      }));
+    };
+    document.addEventListener('zju-forum-search:webvpn-request', onRequest);
+    try {
+      const session = await cc98Adapter.createSession({ url: `${CC98_WEBVPN_PAGE_BASE}/` });
+      await session.search('测试', undefined);
+      expect(requestedUrl).toContain('/https/77726476706e69737468656265737421f1e748d22433310830079bab/topic/search?');
+      expect(getItem).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener('zju-forum-search:webvpn-request', onRequest);
+      vi.unstubAllGlobals();
+    }
   });
 
   it('turns expired login into the required Chinese stop reason', async () => {

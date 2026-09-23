@@ -24,7 +24,7 @@ describe('extension content UI', () => {
     await expect(planner.planFirstRound('测试')).rejects.toThrow('test response');
     await expect(planner.planFeedback({ query: '测试', executedSearches: [], candidates: [] })).rejects.toThrow('test response');
     expect(requests.map((request) => request.type)).toEqual(['planner:first', 'planner:feedback']);
-    expect(requests[1]).toMatchObject({ modelSearchNarrowingEnabled: true });
+    expect(requests[1]).toMatchObject({ modelSearchNarrowingEnabled: false });
     for (const request of requests) expect(request).toMatchObject({ capabilities });
   });
 
@@ -52,6 +52,33 @@ describe('extension content UI', () => {
     expect(container.textContent).not.toContain('学到的扩展词');
     expect(container.textContent).not.toContain('网络原理');
     expect(container.textContent).toContain('模型计划无效，已直接搜索原词。');
+    expect(container.querySelectorAll('.chip-marker')).toHaveLength(0);
+    expect([...container.querySelectorAll('.chip')].map((chip) => chip.textContent)).toEqual([
+      '计算机网络', '计算机网络', '计网', '计网',
+    ]);
+    await act(async () => root.unmount());
+  });
+
+  it('shows the exact search terms sent to the source without adding markers', async () => {
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const snapshot: SearchSnapshot = {
+      query: '98关键词搜索讨论', phase: 'complete', round: 1, requestsMade: 1,
+      plan: {
+        summary: '', searches: [{ query: '98关键词搜索', purpose: '' }],
+        requiredConcepts: [], excludedTerms: [], timeConstraint: { expression: '', startDate: null, endDate: null },
+      },
+      activeSearches: [], executedSearches: ['98搜索bug'], inactiveSearches: [],
+      results: [], softIsolatedResults: [], outOfRangeCount: 0,
+      planningNotice: '', stopReason: 'model_stop', statusText: '完成', finalRerank: 'idle',
+    };
+
+    await act(async () => root.render(<Terms snapshot={snapshot} />));
+    expect([...container.querySelectorAll('.chip')].map((chip) => chip.textContent)).toEqual([
+      '98关键词搜索', '98搜索bug',
+    ]);
+    expect(container.textContent).not.toContain('•');
+    expect(snapshot.plan?.searches[0].query).toBe('98关键词搜索');
     await act(async () => root.unmount());
   });
 
@@ -133,11 +160,16 @@ describe('extension content UI', () => {
   });
 
   it('mounts in Shadow DOM and toggles Scheme A without exposing the API key to page DOM', async () => {
+    let requestOpen: (() => void) | undefined;
     const runtime: RuntimeMessenger = {
       send: async <Request extends ExtensionRequest>(_message: Request) => ({
         ok: true,
         settings: { ...DEFAULT_SETTINGS, llmApiKey: '', hasApiKey: true },
       } as ExtensionResponseFor<Request>),
+      onOpenRequested: (listener) => {
+        requestOpen = listener;
+        return () => { requestOpen = undefined; };
+      },
     };
     let mounted: ReturnType<typeof mountExtension>;
     await act(async () => {
@@ -165,7 +197,7 @@ describe('extension content UI', () => {
     expect(root.textContent).toContain('包括分页');
     const narrowing = root.querySelector('[role="switch"][aria-labelledby="model-search-narrowing-title"]') as HTMLElement;
     const finalRerank = root.querySelector('[role="switch"][aria-labelledby="final-rerank-title"]') as HTMLElement;
-    expect(narrowing.hasAttribute('data-checked')).toBe(true);
+    expect(narrowing.hasAttribute('data-checked')).toBe(false);
     expect(narrowing.parentElement?.textContent).toContain('允许模型提前收窄搜索范围');
     expect(narrowing.parentElement?.textContent).toContain('更多站点请求');
     expect(root.querySelector('.switch-setting')?.textContent).toContain('允许模型提前收窄搜索范围');
@@ -186,6 +218,8 @@ describe('extension content UI', () => {
       (root.querySelector('[aria-label="关闭"]') as HTMLButtonElement).click();
     });
     expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('true');
+    await act(async () => requestOpen?.());
+    expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('false');
   });
 });
 

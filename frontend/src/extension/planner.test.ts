@@ -58,6 +58,14 @@ describe('PlannerClient', () => {
     }
     expect(prompts[1]).toContain('标题为空');
     expect(prompts[1]).toContain('不得推测正文');
+    if (searchSurface === 'title' && querySyntax === 'plain-keyword') {
+      for (const prompt of prompts) {
+        expect(prompt).toContain('微积分 历年 试卷');
+        expect(prompt).toContain('保留“微积分”“期末考试”“回忆卷”等完整词');
+      }
+    } else {
+      for (const prompt of prompts) expect(prompt).not.toContain('微积分 历年 试卷');
+    }
   });
 
   it('sends the current local date in first-round and feedback planning calls', async () => {
