@@ -123,6 +123,7 @@ function SettingsPanel({ runtime, settings, onSettings }: {
   const [draft, setDraft] = useState(settings);
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
+  const apiKeyInputType = globalThis.CSS?.supports?.('-webkit-text-security', 'disc') ? 'text' : 'password';
   useEffect(() => setDraft(settings), [settings]);
 
   async function save(event: FormEvent) {
@@ -152,11 +153,12 @@ function SettingsPanel({ runtime, settings, onSettings }: {
         <input type="url" value={draft.llmBaseUrl} onChange={(event) => setDraft({ ...draft, llmBaseUrl: event.target.value })} placeholder="https://example.com/v1" required />
       </label>
       <label className="field">API key
-        <input type="password" value={draft.llmApiKey} onChange={(event) => setDraft({ ...draft, llmApiKey: event.target.value })} autoComplete="new-password" placeholder={settings.hasApiKey ? '已保存；留空表示不修改' : '尚未设置'} required={!settings.hasApiKey} />
+        <input className="api-key-input" type={apiKeyInputType} value={draft.llmApiKey} onChange={(event) => setDraft({ ...draft, llmApiKey: event.target.value })} autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder={settings.hasApiKey ? '已保存；留空表示不修改' : '尚未设置'} required={!settings.hasApiKey} />
       </label>
       <label className="field">模型名称
         <input value={draft.llmModel} onChange={(event) => setDraft({ ...draft, llmModel: event.target.value })} placeholder="model-name" required />
       </label>
+      <p className="hint">保存时如尚未授权，浏览器会询问是否允许扩展访问该模型主机，用于发送模型请求。</p>
     </section>
 
     <section className="settings-section" aria-labelledby="settings-retrieval-heading">

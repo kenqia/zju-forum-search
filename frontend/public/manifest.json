@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "浙大社区自然语言搜索",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "在 CC98 用自然语言检索帖子；朵朵校友圈仍在适配。",
   "action": {
     "default_title": "打开社区自然语言搜索"

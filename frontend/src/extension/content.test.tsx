@@ -160,6 +160,7 @@ describe('extension content UI', () => {
   });
 
   it('mounts in Shadow DOM and toggles Scheme A without exposing the API key to page DOM', async () => {
+    vi.stubGlobal('CSS', { supports: (property: string, value: string) => property === '-webkit-text-security' && value === 'disc' });
     let requestOpen: (() => void) | undefined;
     const runtime: RuntimeMessenger = {
       send: async <Request extends ExtensionRequest>(_message: Request) => ({
@@ -190,8 +191,13 @@ describe('extension content UI', () => {
     await act(async () => {
       (root.querySelector('[data-tab="settings"]') as HTMLButtonElement).click();
     });
-    expect(root.querySelector('input[type="password"]')).not.toBeNull();
-    expect((root.querySelector('input[type="password"]') as HTMLInputElement).value).toBe('');
+    const apiKeyInput = root.querySelector('.api-key-input') as HTMLInputElement;
+    expect(apiKeyInput.type).toBe('text');
+    expect(apiKeyInput.autocomplete).toBe('off');
+    expect(apiKeyInput.getAttribute('spellcheck')).toBe('false');
+    expect(apiKeyInput.value).toBe('');
+    expect(root.querySelector('input[type="password"]')).toBeNull();
+    expect(root.textContent).toContain('如尚未授权，浏览器会询问是否允许扩展访问该模型主机');
     expect(root.textContent).toContain('站点请求上限');
     expect(root.textContent).not.toContain('检索时长');
     expect(root.textContent).toContain('包括分页');
@@ -220,6 +226,7 @@ describe('extension content UI', () => {
     expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('true');
     await act(async () => requestOpen?.());
     expect(root.querySelector('[aria-label="社区自然语言搜索"]')?.getAttribute('aria-hidden')).toBe('false');
+    vi.unstubAllGlobals();
   });
 });
 
