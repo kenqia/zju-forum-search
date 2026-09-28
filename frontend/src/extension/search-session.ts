@@ -83,7 +83,7 @@ export function stopReasonText(reason: SearchStopReason): string {
     replaced: '已发起新查询，旧搜索已终止。',
     not_logged_in: '请先登录，然后刷新页面再试。',
     rate_limited: '搜索源暂时限制了搜索请求，保留当前部分结果。',
-    model_timeout: '模型调用超过 20 秒，保留当前部分结果。',
+    model_timeout: '模型调用超过 60 秒，保留当前部分结果。',
     failed: '搜索失败，保留当前部分结果。',
   };
   return messages[reason];

@@ -343,7 +343,7 @@ describe('SearchSession', () => {
       planner: {
         planFirstRound: async () => ({ ...initialPlan, searches: [{ query: '高数', purpose: '' }] }),
         planFeedback: async () => {
-          throw new SearchSessionError('反馈模型调用超过 20 秒，已保留当前结果。', 'model_timeout');
+          throw new SearchSessionError('反馈模型调用超过 60 秒，已保留当前结果。', 'model_timeout');
         },
       },
       source: asPageSource(vi.fn(async () => [{ id: 'kept', title: '高数资料' }])),
@@ -353,7 +353,7 @@ describe('SearchSession', () => {
     const result = await session.run('高数资料', 60);
 
     expect(result.stopReason).toBe('model_timeout');
-    expect(result.statusText).toBe('反馈模型调用超过 20 秒，已保留当前结果。');
+    expect(result.statusText).toBe('反馈模型调用超过 60 秒，已保留当前结果。');
     expect(result.results.map((topic) => topic.id)).toEqual(['kept']);
   });
 

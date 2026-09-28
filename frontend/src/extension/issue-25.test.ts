@@ -175,7 +175,7 @@ describe('issue #25 retrieval waves', () => {
     const session = new SearchSession({
       planner: {
         planFirstRound: async () => plan,
-        planFeedback: async () => { throw new SearchSessionError('反馈模型调用超过 20 秒，已保留当前结果。', 'model_timeout'); },
+        planFeedback: async () => { throw new SearchSessionError('反馈模型调用超过 60 秒，已保留当前结果。', 'model_timeout'); },
         rerankResults,
       },
       source: {

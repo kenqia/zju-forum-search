@@ -157,7 +157,7 @@ function createTransport(dependencies: BackgroundDependencies): PlannerTransport
             signal: requestController.signal,
           });
         } catch (error) {
-          if (timedOut) throw new PlannerError('模型调用超过 20 秒', 'model_timeout');
+          if (timedOut) throw new PlannerError('模型调用超过 60 秒', 'model_timeout');
           if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
             throw new PlannerError('模型请求已取消', 'model_cancelled');
           }
@@ -168,7 +168,7 @@ function createTransport(dependencies: BackgroundDependencies): PlannerTransport
         try {
           body = await response.json();
         } catch {
-          if (timedOut) throw new PlannerError('模型调用超过 20 秒', 'model_timeout');
+          if (timedOut) throw new PlannerError('模型调用超过 60 秒', 'model_timeout');
           throw new PlannerError('模型服务没有返回有效 JSON');
         }
         const content = (body as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message?.content;

@@ -268,5 +268,5 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   searchBudgetSeconds: 60,
 };
 
-export const MODEL_TIMEOUT_MS = 20_000;
+export const MODEL_TIMEOUT_MS = 60_000;
 export const MODEL_MAX_COMPLETION_TOKENS = 1200;

@@ -220,7 +220,7 @@ describe('background message boundary', () => {
     expect(requestBody).toMatchObject({ enable_thinking: false, max_completion_tokens: 1200 });
   });
 
-  it('reports a model timeout after 20 seconds instead of a connection failure', async () => {
+  it('reports a model timeout after 60 seconds instead of a connection failure', async () => {
     vi.useFakeTimers();
     try {
       const { send } = harness({
@@ -230,11 +230,15 @@ describe('background message boundary', () => {
       });
 
       const pending = send({ type: 'planner:first', capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' }, requestId: 'request-timeout', query: '高数' });
-      await vi.advanceTimersByTimeAsync(20_000);
+      let settled = false;
+      void pending.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
 
       await expect(pending).resolves.toEqual({
         ok: false,
-        error: '模型调用超过 20 秒',
+        error: '模型调用超过 60 秒',
         code: 'model_timeout',
       });
     } finally {

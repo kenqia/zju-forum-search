@@ -43,7 +43,7 @@ function chromeMessenger(runtime: ChromeRuntime): RuntimeMessenger {
 
 function responseError(response: { ok: false; error: string; code?: ExtensionFailureCode }, timeoutMessage?: string): Error {
   if (response.code === 'model_timeout') {
-    return new SearchSessionError(timeoutMessage ?? '模型调用超过 20 秒，已停止搜索。', 'model_timeout');
+    return new SearchSessionError(timeoutMessage ?? '模型调用超过 60 秒，已停止搜索。', 'model_timeout');
   }
   return new Error(response.error || '扩展后台请求失败');
 }
@@ -73,7 +73,7 @@ class BackgroundPlanner implements SearchPlanner {
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
     const request = { type: 'planner:first' as const, requestId, query, capabilities: this.capabilities };
     const response = await this.withCancellation(this.runtime.send(request), requestId, signal);
-    if (!response.ok) throw responseError(response, '模型调用超过 20 秒，未开始检索。');
+    if (!response.ok) throw responseError(response, '模型调用超过 60 秒，未开始检索。');
     return response.plan;
   }
   private async requestFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
@@ -83,14 +83,14 @@ class BackgroundPlanner implements SearchPlanner {
       type: 'planner:feedback', requestId, input, capabilities: this.capabilities,
       modelSearchNarrowingEnabled: this.modelSearchNarrowingEnabled,
     }), requestId, signal);
-    if (!response.ok) throw responseError(response, '反馈模型调用超过 20 秒，已保留当前结果。');
+    if (!response.ok) throw responseError(response, '反馈模型调用超过 60 秒，已保留当前结果。');
     return response.feedback;
   }
   private async requestFinalRerank(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
     const response = await this.withCancellation(this.runtime.send({ type: 'planner:rerank', requestId, input, capabilities: this.capabilities }), requestId, signal);
-    if (!response.ok) throw responseError(response, '最终列表重排超过 20 秒，已保留本地预排序。');
+    if (!response.ok) throw responseError(response, '最终列表重排超过 60 秒，已保留本地预排序。');
     return response.rerank;
   }
   planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {

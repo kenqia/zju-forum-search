@@ -86,7 +86,7 @@ describe('extension content UI', () => {
     const runtime: RuntimeMessenger = {
       send: async <Request extends ExtensionRequest>(_message: Request) => ({
         ok: false,
-        error: '模型调用超过 20 秒',
+        error: '模型调用超过 60 秒',
         code: 'model_timeout',
       } as ExtensionResponseFor<Request>),
     };
@@ -95,7 +95,7 @@ describe('extension content UI', () => {
       query: '高数', executedSearches: [], candidates: [],
     })).rejects.toMatchObject({
       reason: 'model_timeout',
-      message: '反馈模型调用超过 20 秒，已保留当前结果。',
+      message: '反馈模型调用超过 60 秒，已保留当前结果。',
     });
   });
 
