@@ -12,8 +12,6 @@
 
 [![搜索演示录屏，展示查询、逐轮检索和结果列表](assets/demo-6x.gif)](assets/demo-6x.mp4)
 
-录屏已加速 6 倍，播放约 17 秒。点击动图打开 MP4 视频。
-
 ## 安装
 
 推荐从[最新 Release](https://github.com/kenqia/zju-forum-search/releases/latest)下载扩展：
