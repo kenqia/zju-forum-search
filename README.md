@@ -97,9 +97,9 @@ WebVPN 桥接存在同页面脚本可触发桥接事件的边界，详见[登录
 
 ```bash
 cd frontend
-npm test
-npm run typecheck
-npm run build
+npm run check
 ```
+
+CI 在推送 `main` 和 PR 时运行现有检查与发布包校验；本地发布准备使用 `npm run release:prepare`，需要 Python 3 和干净的工作区。具体产物、远端校验和发布顺序见[发布流程](docs/agents/releases.md)。
 
 浏览器内的人工检查入口和各阶段验收向导见[手动验收](docs/manual-acceptance.md)。
