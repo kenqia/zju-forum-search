@@ -100,6 +100,8 @@ function isFinalRerankInput(value: unknown): value is import('./types').FinalRer
 function isExtensionRequest(message: unknown): message is ExtensionRequest {
   if (!message || typeof message !== 'object') return false;
   const value = message as Record<string, unknown>;
+  if (value.runId !== undefined && (typeof value.runId !== 'string' || !value.runId || value.runId.length > 100)) return false;
+  if (value.type === 'planner:begin' || value.type === 'planner:finish') return typeof value.runId === 'string';
   if (value.type === 'settings:get') return true;
   if (value.type === 'trial:get') return true;
   if (value.type === 'trial:finish') return typeof value.runId === 'string';
@@ -191,13 +193,16 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
   const transport = createTransport(dependencies);
   const trial = dependencies.trialStorage ? new TrialClient(dependencies.trialStorage, dependencies.fetch) : undefined;
   const plannerControllers = new Map<string, AbortController>();
-  const runSettings = new Map<string, { settings: Promise<ExtensionSettings>; expires: number }>();
+  type ModelRun = { settings: Promise<ExtensionSettings>; expires: number; pending: Set<Promise<void>>; closing: boolean };
+  const runSettings = new Map<string, ModelRun>();
+  const newRun = (): ModelRun => ({ settings: dependencies.storage.get().then(normalizeSettings),
+    expires: Date.now() + 2 * 60 * 60 * 1000, pending: new Set(), closing: false });
   return (message: unknown, sendResponse: SendResponse, sourceId?: string, documentId = ''): boolean => {
     if (!isExtensionRequest(message)) return false;
     const request = message;
     const type = request.type;
     const scopedKey = (id: string) => JSON.stringify([sourceId, documentId, id]);
-    for (const [key, run] of runSettings) if (run.expires < Date.now()) runSettings.delete(key);
+    for (const [key, run] of runSettings) if (run.expires < Date.now() && !run.pending.size) runSettings.delete(key);
 
     if (type === 'planner:cancel') {
       plannerControllers.get(scopedKey(request.requestId))?.abort();
@@ -205,12 +210,40 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
       return false;
     }
 
-    const plannerController = type.startsWith('planner:') ? new AbortController() : null;
-    const keepAlive = plannerController && dependencies.keepAlive ? setInterval(() => dependencies.keepAlive!(), 20_000) : undefined;
+    const runKey = 'runId' in request && request.runId ? scopedKey(request.runId) : undefined;
+    if (runKey && type === 'planner:begin' && !runSettings.has(runKey)) runSettings.set(runKey, newRun());
+    const run = runKey ? runSettings.get(runKey) : undefined;
+    const isModelCall = type === 'planner:first' || type === 'planner:feedback' || type === 'planner:rerank';
+    if (run?.closing && (isModelCall || type === 'planner:begin')) {
+      sendResponse(errorResponse(new PlannerError('搜索运行已结束，请重新开始搜索')));
+      return false;
+    }
+    let releaseCall: (() => void) | undefined;
+    const pendingCall = isModelCall && run ? new Promise<void>((resolve) => { releaseCall = resolve; }) : undefined;
+    if (pendingCall) run!.pending.add(pendingCall);
+    if (type === 'planner:finish' && run) run.closing = true;
+    const plannerController = isModelCall ? new AbortController() : null;
+    const keepAlive = (isModelCall || type === 'planner:finish') && dependencies.keepAlive
+      ? setInterval(() => dependencies.keepAlive!(), 20_000) : undefined;
     if (plannerController && 'requestId' in request) plannerControllers.set(scopedKey(request.requestId), plannerController);
 
     void (async () => {
       try {
+        if (type === 'planner:begin') {
+          try { sendResponse({ ok: true, settings: publicSettings(await run!.settings) }); }
+          catch (error) { runSettings.delete(runKey!); throw error; }
+          return;
+        }
+        if (type === 'planner:finish') {
+          if (run) {
+            await Promise.allSettled([...run.pending]);
+            const saved = await run.settings;
+            if (!saved.llmApiKey && trial && sourceId === 'cc98') await trial.finish(request.runId);
+            runSettings.delete(runKey!);
+          }
+          sendResponse({ ok: true });
+          return;
+        }
         if (type === 'trial:get' || type === 'trial:finish') {
           if (!trial || sourceId !== 'cc98') throw new TrialClientError('免费体验暂不可用，当前只开放 CC98', 'trial_unavailable');
           if (type === 'trial:get') sendResponse({ ok: true, trial: await trial.status() });
@@ -233,11 +266,6 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
           return;
         }
 
-        const runKey = request.runId ? scopedKey(request.runId) : undefined;
-        if (runKey && type === 'planner:first' && !runSettings.has(runKey)) {
-          runSettings.set(runKey, { settings: dependencies.storage.get().then(normalizeSettings), expires: Date.now() + 2 * 60 * 60 * 1000 });
-        }
-        const run = runKey ? runSettings.get(runKey) : undefined;
         if (runKey && !run) throw new PlannerError('搜索运行已失效，请重新开始搜索');
         const saved = run ? await run.settings : normalizeSettings(await dependencies.storage.get());
         if (!saved.llmApiKey) {
@@ -262,6 +290,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         if ('requestId' in request) plannerControllers.delete(scopedKey(request.requestId));
         sendResponse(errorResponse(error));
       } finally {
+        if (pendingCall) { run!.pending.delete(pendingCall); releaseCall!(); }
         if (keepAlive !== undefined) clearInterval(keepAlive);
         if ('requestId' in request) plannerControllers.delete(scopedKey(request.requestId));
       }

@@ -21,6 +21,23 @@ const first = (runId = randomUUID()) => ({ kind: 'first', runId, query: '找高�
 const feedback = (runId: string) => ({ kind: 'feedback', runId, input: { query: '找高数课程资料', executedSearches: [], candidates: [] } });
 
 describe('sponsored trial relay', () => {
+  it('waits for the provider to release the run before finishing a cancelled search', async () => {
+    const db = store(); const token = db.register(); const request = first();
+    let release!: (value: Response) => void;
+    const provider = vi.fn(() => new Promise<Response>((resolve) => { release = resolve; }));
+    const service = new RelayService(db, config(), provider);
+    const pending = service.plan(token, request);
+    let finished = false;
+    const finish = service.finish(db.owner(token), request.runId).then(() => { finished = true; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    release(response(plan));
+    await pending; await finish;
+    await expect(service.plan(token, feedback(request.runId))).rejects.toMatchObject({ code: 'trial_invalid' });
+    provider.mockImplementation(async () => response(plan));
+    await expect(service.plan(token, first())).resolves.toMatchObject({ ok: true });
+  });
+
   it('charges one full search, including feedback and rerank; refuses a sixth search', async () => {
     const db = store(); const token = db.register(); const owner = db.owner(token);
     const provider = vi.fn(async (_url: unknown, init?: RequestInit) => {

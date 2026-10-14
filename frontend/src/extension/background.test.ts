@@ -30,10 +30,53 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
 }
 
 describe('background message boundary', () => {
+  it('keeps a sponsored run on the relay when a key is saved mid-run', async () => {
+    let saved = { ...DEFAULT_SETTINGS };
+    const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ ok: true, plan: {}, feedback: {} })));
+    const { dependencies } = harness({ storage: { get: async () => saved, set: async (settings) => { saved = settings; } },
+      trialStorage: { get: async () => 'a'.repeat(64), set: async () => undefined }, fetch });
+    const handler = createMessageHandler(dependencies);
+    const send = (request: unknown) => new Promise((resolve) => handler(request, resolve, 'cc98'));
+    const runId = crypto.randomUUID();
+    const capabilities = { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } as const;
+    await send({ type: 'planner:begin', runId });
+    await send({ type: 'planner:first', runId, requestId: 'first', capabilities, query: '高数' });
+    await send({ type: 'settings:save', settings: { ...DEFAULT_SETTINGS, llmApiKey: 'synthetic-own-key' } });
+    await send({ type: 'planner:feedback', runId, requestId: 'feedback', capabilities,
+      input: { query: '高数', executedSearches: [], candidates: [] } });
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://api.kenqia.top/v1/trial/plan', 'https://api.kenqia.top/v1/trial/plan',
+    ]);
+  });
+
+  it('freezes the model route at begin and releases it only after in-flight calls finish', async () => {
+    const { send, dependencies } = harness();
+    const runId = crypto.randomUUID();
+    const capabilities = { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } as const;
+    await expect(send({ type: 'planner:begin', runId })).resolves.toMatchObject({ ok: true, settings: { hasApiKey: true, llmApiKey: '' } });
+    await send({ type: 'settings:save', settings: { ...DEFAULT_SETTINGS, llmApiKey: 'new-test-key', llmModel: 'new-model' } });
+    let release!: (response: Response) => void;
+    vi.mocked(dependencies.fetch).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    const pending = send({ type: 'planner:first', runId, requestId: 'pending', query: '高数', capabilities });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    expect(JSON.parse(String(vi.mocked(dependencies.fetch).mock.calls[0][1]?.body)).model).toBe(DEFAULT_SETTINGS.llmModel);
+    let finished = false;
+    const finish = send({ type: 'planner:finish', runId }).then((reply) => { finished = true; return reply; });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(finished).toBe(false);
+    release(new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] })));
+    await pending;
+    await expect(finish).resolves.toEqual({ ok: true });
+    await expect(send({ type: 'planner:feedback', runId, requestId: 'late', capabilities,
+      input: { query: '高数', executedSearches: [], candidates: [] } })).resolves.toMatchObject({ ok: false });
+    expect(dependencies.fetch).toHaveBeenCalledOnce();
+  });
+
   it('keeps the model settings for a run while later runs use saved changes', async () => {
     const { send, dependencies } = harness();
     const capabilities = { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } as const;
     const runId = crypto.randomUUID();
+    await send({ type: 'planner:begin', runId });
     await send({ type: 'planner:first', requestId: 'first', runId, query: '高数', capabilities });
     await send({ type: 'settings:save', settings: { ...DEFAULT_SETTINGS, llmApiKey: 'replacement-test-key',
       llmBaseUrl: 'https://replacement.invalid/v1', llmModel: 'replacement' } });
@@ -42,7 +85,9 @@ describe('background message boundary', () => {
     const calls = vi.mocked(dependencies.fetch).mock.calls;
     expect(calls[1][0]).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions');
     expect(JSON.parse(String(calls[1][1]?.body)).model).toBe(DEFAULT_SETTINGS.llmModel);
-    await send({ type: 'planner:first', requestId: 'next', runId: crypto.randomUUID(), query: '高数', capabilities });
+    const nextRun = crypto.randomUUID();
+    await send({ type: 'planner:begin', runId: nextRun });
+    await send({ type: 'planner:first', requestId: 'next', runId: nextRun, query: '高数', capabilities });
     expect(calls[2][0]).toBe('https://replacement.invalid/v1/chat/completions');
   });
 
@@ -54,12 +99,14 @@ describe('background message boundary', () => {
     const handler = createMessageHandler(dependencies);
     const request = { type: 'planner:first', requestId: 'synthetic', runId: crypto.randomUUID(), query: '找高数资料',
       capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } };
+    await new Promise((resolve) => handler({ type: 'planner:begin', runId: request.runId }, resolve, 'cc98'));
     const response = await new Promise((resolve) => handler(request, resolve, 'cc98'));
     expect(response).toEqual({ ok: true, plan: { summary: '试用' } });
     expect(JSON.stringify(response)).not.toContain(credential);
     expect(fetch.mock.calls[0][0]).toBe('https://api.kenqia.top/v1/trial/plan');
     expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ kind: 'first', runId: request.runId, query: request.query });
     fetch.mockClear();
+    await new Promise((resolve) => handler({ type: 'planner:begin', runId: request.runId }, resolve, 'duo'));
     const denied = await new Promise((resolve) => handler(request, resolve, 'duo'));
     expect(denied).toMatchObject({ ok: false, code: 'trial_unavailable' });
     expect(fetch).not.toHaveBeenCalled();
@@ -68,7 +115,9 @@ describe('background message boundary', () => {
   it('keeps saved keys on the direct path and allows trial settings without requesting model permission', async () => {
     const trialStorage = { get: vi.fn(async () => 'a'.repeat(64)), set: vi.fn() };
     const own = harness({ trialStorage });
-    await own.send({ type: 'planner:first', requestId: 'own', runId: crypto.randomUUID(), query: '找高数资料',
+    const runId = crypto.randomUUID();
+    await own.send({ type: 'planner:begin', runId });
+    await own.send({ type: 'planner:first', requestId: 'own', runId, query: '找高数资料',
       capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } });
     expect(trialStorage.get).not.toHaveBeenCalled();
     expect(own.dependencies.fetch).toHaveBeenCalledWith('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', expect.anything());

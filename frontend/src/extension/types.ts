@@ -239,6 +239,8 @@ export type ExtensionRequest =
   | { type: 'trial:finish'; runId: string }
   | { type: 'settings:get' }
   | { type: 'settings:save'; settings: Partial<ExtensionSettings> }
+  | { type: 'planner:begin'; runId: string }
+  | { type: 'planner:finish'; runId: string }
   | { type: 'planner:first'; requestId: string; runId?: string; query: string; capabilities: SourceCapabilities }
   | { type: 'planner:feedback'; requestId: string; runId?: string; input: FeedbackRequestInput; capabilities: SourceCapabilities; modelSearchNarrowingEnabled?: boolean }
   | { type: 'planner:rerank'; requestId: string; runId?: string; input: FinalRerankRequestInput; capabilities: SourceCapabilities }
@@ -250,7 +252,7 @@ type ExtensionFailure = { ok: false; error: string; code?: ExtensionFailureCode 
 export type ExtensionResponseFor<Request extends ExtensionRequest> = ExtensionFailure | (
   Request extends { type: 'trial:get' }
     ? { ok: true; trial: TrialStatus }
-    : Request extends { type: 'settings:get' | 'settings:save' }
+    : Request extends { type: 'settings:get' | 'settings:save' | 'planner:begin' }
     ? { ok: true; settings: PublicExtensionSettings }
     : Request extends { type: 'planner:first' }
       ? { ok: true; plan: ModelQueryPlan }

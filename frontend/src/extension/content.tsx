@@ -4,15 +4,11 @@ import { Collapsible, NumberField, Switch, Tabs } from '@base-ui/react';
 import { Check, ChevronDown, LoaderCircle, Minus, Plus, Search, ShieldCheck, Settings2, X } from 'lucide-react';
 import panelCss from './panel.css?inline';
 
-import { sourceRegistry } from './source-registry';
-import type { FeedbackInput } from './planner';
-import { SearchSession, SearchSessionError, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type FinalRerankPlan, type FinalRerankRequestInput, type ModelQueryPlan, type PublicExtensionSettings, type TrialStatus } from './types';
-
-export interface RuntimeMessenger {
-  send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
-  onOpenRequested?(listener: () => void): () => void;
-}
+import type { SearchSnapshot } from './search-session';
+import { SearchRun, responseError, type SearchRunState, type RuntimeMessenger } from './search-run';
+import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor, type PublicExtensionSettings } from './types';
+export { createBackgroundPlanner } from './search-run';
+export type { RuntimeMessenger } from './search-run';
 
 interface ChromeRuntime {
   lastError?: { message?: string };
@@ -40,84 +36,6 @@ function chromeMessenger(runtime: ChromeRuntime): RuntimeMessenger {
     },
   };
 }
-
-function responseError(response: { ok: false; error: string; code?: ExtensionFailureCode }, timeoutMessage?: string): Error {
-  if (response.code === 'model_timeout') {
-    return new SearchSessionError(timeoutMessage ?? '模型调用超过 60 秒，已停止搜索。', 'model_timeout');
-  }
-  return new Error(response.error || '扩展后台请求失败');
-}
-
-class BackgroundPlanner implements SearchPlanner {
-  private readonly runId = globalThis.crypto.randomUUID();
-  constructor(
-    private readonly runtime: RuntimeMessenger,
-    private readonly capabilities: SourceCapabilities,
-    private readonly modelSearchNarrowingEnabled: boolean,
-  ) {}
-  private withCancellation<T>(response: Promise<T>, requestId: string, signal?: AbortSignal): Promise<T> {
-    if (!signal) return response;
-    return new Promise<T>((resolve, reject) => {
-      const abort = () => {
-        void this.runtime.send({ type: 'planner:cancel', requestId }).catch(() => undefined);
-        reject(new DOMException('模型请求已取消', 'AbortError'));
-      };
-      signal.addEventListener('abort', abort, { once: true });
-      void response.then(
-        (value) => { signal.removeEventListener('abort', abort); resolve(value); },
-        (error) => { signal.removeEventListener('abort', abort); reject(error); },
-      );
-    });
-  }
-  private async requestPlan(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
-    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-    if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const request = { type: 'planner:first' as const, requestId, runId: this.runId, query, capabilities: this.capabilities };
-    const response = await this.withCancellation(this.runtime.send(request), requestId, signal);
-    if (!response.ok) throw responseError(response, '模型调用超过 60 秒，未开始检索。');
-    return response.plan;
-  }
-  private async requestFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
-    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-    if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const response = await this.withCancellation(this.runtime.send({
-      type: 'planner:feedback', requestId, runId: this.runId, input, capabilities: this.capabilities,
-      modelSearchNarrowingEnabled: this.modelSearchNarrowingEnabled,
-    }), requestId, signal);
-    if (!response.ok) throw responseError(response, '反馈模型调用超过 60 秒，已保留当前结果。');
-    return response.feedback;
-  }
-  private async requestFinalRerank(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {
-    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-    if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const response = await this.withCancellation(this.runtime.send({ type: 'planner:rerank', requestId, runId: this.runId, input, capabilities: this.capabilities }), requestId, signal);
-    if (!response.ok) throw responseError(response, '最终列表重排超过 60 秒，已保留本地预排序。');
-    return response.rerank;
-  }
-  planFirstRound(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
-    return this.requestPlan(query, signal);
-  }
-  planFeedback(input: FeedbackInput, signal?: AbortSignal): Promise<FeedbackPlan> {
-    return this.requestFeedback(input, signal);
-  }
-  rerankResults(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {
-    return this.requestFinalRerank(input, signal);
-  }
-  async finish() {
-    await this.runtime.send({ type: 'trial:finish', runId: this.runId }).catch(() => undefined);
-  }
-}
-
-export function createBackgroundPlanner(runtime: RuntimeMessenger, capabilities: SourceCapabilities, modelSearchNarrowingEnabled = DEFAULT_SETTINGS.modelSearchNarrowingEnabled): SearchPlanner {
-  return new BackgroundPlanner(runtime, capabilities, modelSearchNarrowingEnabled);
-}
-
-const EMPTY_SNAPSHOT: SearchSnapshot = {
-  query: '', phase: 'planning', round: 0, requestsMade: 0, plan: null,
-  activeSearches: [], executedSearches: [], inactiveSearches: [], results: [],
-  softIsolatedResults: [],
-  outOfRangeCount: 0, planningNotice: '', stopReason: null, statusText: '输入你想找的内容，结果会在每个检索波次后更新。', finalRerank: 'idle',
-};
 
 function SettingsPanel({ runtime, settings, onSettings }: {
   runtime: RuntimeMessenger;
@@ -268,16 +186,6 @@ export function Terms({ snapshot }: { snapshot: SearchSnapshot }) {
   </>;
 }
 
-interface SearchState {
-  query: string;
-  snapshot: SearchSnapshot;
-}
-
-interface SearchController {
-  session: SearchSession | null;
-  runId: number;
-}
-
 export function SearchStatus({ snapshot, running, onStop }: {
   snapshot: SearchSnapshot;
   running: boolean;
@@ -295,64 +203,21 @@ export function SearchStatus({ snapshot, running, onStop }: {
   </>;
 }
 
-function SearchPanel({ runtime, settings, state, onState, controller, trial, trialLoading, onRefreshTrial, onConfigure }: {
-  runtime: RuntimeMessenger;
+function SearchPanel({ settings, state, run, onConfigure }: {
   settings: PublicExtensionSettings;
-  state: SearchState;
-  onState(patch: Partial<SearchState>): void;
-  controller: SearchController;
-  trial: TrialStatus | null;
-  trialLoading: boolean;
-  onRefreshTrial(): void;
+  state: SearchRunState;
+  run: SearchRun;
   onConfigure(): void;
 }) {
-  const { query, snapshot } = state;
+  const [query, setQuery] = useState('');
+  const { snapshot, running, trial, trialLoading, settling } = state;
   const inputRef = useRef<HTMLInputElement>(null);
-  const setQuery = (value: string) => onState({ query: value });
-  const setSnapshot = (next: SearchSnapshot) => onState({ snapshot: next });
-  const running = snapshot.phase !== 'complete' && snapshot.round > 0;
-
   async function search(event: FormEvent) {
     event.preventDefault();
-    const normalized = query.trim();
-    if (!normalized) return;
-    controller.session?.stop('replaced');
-    controller.session = null;
-    const currentRun = ++controller.runId;
-    try {
-      const adapter = sourceRegistry.resolve(location.href);
-      if (!adapter) throw new Error('当前页面没有可用的搜索源。');
-      const source = await adapter.createSession({ url: location.href });
-      if (controller.runId !== currentRun) return;
-      const planner = new BackgroundPlanner(runtime, source.capabilities, settings.modelSearchNarrowingEnabled);
-      const sponsored = !settings.hasApiKey;
-      const nextSession = new SearchSession({
-        planner,
-        source,
-        finalRerankEnabled: settings.finalRerankEnabled,
-        finalRerankTopM: sponsored ? Math.min(30, settings.finalRerankTopM) : settings.finalRerankTopM,
-        modelSearchNarrowingEnabled: settings.modelSearchNarrowingEnabled,
-        onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
-      });
-      controller.session = nextSession;
-      try {
-        await nextSession.run(normalized, sponsored ? Math.min(30, settings.searchRequestLimit) : settings.searchRequestLimit, settings.feedbackEvidenceLimit);
-      } finally {
-        if (sponsored) { await planner.finish(); onRefreshTrial(); }
-      }
-      if (controller.session === nextSession) controller.session = null;
-    } catch (error) {
-      if (controller.runId !== currentRun) return;
-      const stopReason = error instanceof SourceError && error.code === 'not_logged_in' ? 'not_logged_in'
-        : error instanceof SourceError && error.code === 'rate_limited' ? 'rate_limited' : 'failed';
-      setSnapshot({ ...EMPTY_SNAPSHOT, query: normalized, phase: 'complete', stopReason,
-        statusText: error instanceof Error ? error.message : '无法创建搜索源。' });
-    }
+    await run.start(query, settings);
   }
-
-  function stop() {
-    controller.session?.stop('user_stopped');
-  }
+  function stop() { run.stop(); }
+  function onRefreshTrial() { void run.refreshTrial(); }
 
   function fillExample(example: string) {
     setQuery(example);
@@ -371,8 +236,9 @@ function SearchPanel({ runtime, settings, state, onState, controller, trial, tri
     <form className="search-form" onSubmit={search}>
       <Search size={16} aria-hidden="true" />
       <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="找课程、老师、资料或校园讨论…" aria-label="自然语言查询" required />
-      <button className="primary" disabled={!settings.hasApiKey && (running || trialLoading || !trial?.available || trial.remaining === 0)}>{running ? '新搜索' : '搜索'}</button>
+      <button className="primary" disabled={!run.canStart(settings)}>{running ? '新搜索' : '搜索'}</button>
     </form>
+    {settling && !running && <p className="hint" role="status">正在完成免费体验收尾并更新额度…</p>}
     {(snapshot.round > 0 || snapshot.query) && <SearchStatus snapshot={snapshot} running={running} onStop={stop} />}
     {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
     {snapshot.round === 0 && !snapshot.query && <div className="empty-state">
@@ -422,23 +288,21 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'search' | 'settings'>('search');
   const [settings, setSettings] = useState<PublicExtensionSettings>(DEFAULT_SETTINGS);
-  const [trial, setTrial] = useState<TrialStatus | null>(null);
-  const [trialLoading, setTrialLoading] = useState(false);
-  function refreshTrial() {
-    setTrialLoading(true);
-    void runtime.send({ type: 'trial:get' }).then((response) => {
-      setTrial(response.ok ? response.trial : null);
-    }).catch(() => setTrial(null)).finally(() => setTrialLoading(false));
-  }
-  const [searchState, setSearchState] = useState<SearchState>({ query: '', snapshot: EMPTY_SNAPSHOT });
-  const searchController = useRef<SearchController>({ session: null, runId: 0 });
+  const [runState, setRunState] = useState<SearchRunState>();
+  const [run] = useState(() => new SearchRun({ runtime, onUpdate: setRunState }));
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   useEffect(() => {
     void runtime.send({ type: 'settings:get' }).then((response) => {
-      if (response.ok) setSettings(response.settings);
+      if (response.ok) { setSettings(response.settings); setSettingsLoaded(true); }
     }).catch(() => undefined);
   }, [runtime]);
   useEffect(() => runtime.onOpenRequested?.(() => setOpen(true)), [runtime]);
-  useEffect(() => { if (open && !settings.hasApiKey) refreshTrial(); }, [open, settings.hasApiKey]);
+  useEffect(() => { if (settingsLoaded && open && !settings.hasApiKey) void run.refreshTrial(); }, [open, settings.hasApiKey, settingsLoaded, run]);
+  useEffect(() => {
+    const leave = () => run.stop('replaced');
+    window.addEventListener('pagehide', leave);
+    return () => { window.removeEventListener('pagehide', leave); run.dispose(); };
+  }, [run]);
 
   return <>
     <style>{panelCss}</style>
@@ -450,7 +314,7 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
       <Tabs.Root value={tab} onValueChange={(value) => setTab(value as 'search' | 'settings')} className="app-tabs">
         <Tabs.List className="tabs" aria-label="功能切换"><Tabs.Tab value="search" data-tab="search" className="tab">搜索</Tabs.Tab><Tabs.Tab value="settings" data-tab="settings" className="tab"><Settings2 size={14} aria-hidden="true" />设置</Tabs.Tab></Tabs.List>
         <main className="drawer-main">
-          <Tabs.Panel value="search" keepMounted className="tab-panel"><SearchPanel runtime={runtime} settings={settings} state={searchState} onState={(patch) => setSearchState((current) => ({ ...current, ...patch }))} controller={searchController.current} trial={trial} trialLoading={trialLoading} onRefreshTrial={refreshTrial} onConfigure={() => setTab('settings')} /></Tabs.Panel>
+          <Tabs.Panel value="search" keepMounted className="tab-panel"><SearchPanel settings={settings} state={runState ?? run.state} run={run} onConfigure={() => setTab('settings')} /></Tabs.Panel>
           <Tabs.Panel value="settings" keepMounted className="tab-panel"><SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} /></Tabs.Panel>
         </main>
       </Tabs.Root>
@@ -465,8 +329,9 @@ export function mountExtension(targetDocument: Document, runtime: RuntimeMesseng
   host.id = 'zju-forum-search-extension';
   const shadowRoot = host.attachShadow({ mode });
   targetDocument.documentElement.append(host);
-  createRoot(shadowRoot).render(<App runtime={runtime} />);
-  return { host, shadowRoot };
+  const root = createRoot(shadowRoot);
+  root.render(<App runtime={runtime} />);
+  return { host, shadowRoot, unmount: () => { root.unmount(); host.remove(); } };
 }
 
 const chromeApi = (globalThis as typeof globalThis & { chrome?: { runtime?: ChromeRuntime } }).chrome;

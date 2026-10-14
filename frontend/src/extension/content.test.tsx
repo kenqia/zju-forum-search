@@ -265,7 +265,7 @@ describe('registered source UI', () => {
     const runtime: RuntimeMessenger = {
       send: async <Request extends ExtensionRequest>(message: Request) => {
         messages.push(message.type);
-        return { ok: true, settings: DEFAULT_SETTINGS } as ExtensionResponseFor<Request>;
+        return { ok: true, settings: { ...DEFAULT_SETTINGS, hasApiKey: true } } as ExtensionResponseFor<Request>;
       },
     };
     // Use a separate document so prior mounts cannot affect this interaction.
@@ -283,7 +283,7 @@ describe('registered source UI', () => {
         root.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       });
       expect(root.textContent).toContain(message);
-      expect(messages).toEqual(['settings:get']);
+      expect(messages).toEqual(['settings:get', 'planner:begin', 'planner:finish']);
     } finally {
       vi.unstubAllGlobals();
     }

@@ -5,17 +5,27 @@ import { parseRequest } from './input';
 import { TrialError, TrialStore } from './store';
 
 export class RelayService {
-  private readonly busy = new Set<string>();
+  private readonly busy = new Map<string, { owner: string; done: Promise<void> }>();
+  private readonly closing = new Set<string>();
   private readonly busyOwners = new Set<string>();
   private inFlight = 0;
   constructor(readonly store: TrialStore, readonly config: RelayConfig, private readonly providerFetch = fetch) {}
   status(owner: string) {
     return { remaining: this.store.remaining(owner), available: this.store.available(this.config) };
   }
+  async finish(owner: string, runId: string) {
+    const active = this.busy.get(runId);
+    if (active && active.owner !== owner) throw new TrialError('trial_invalid', 409);
+    this.closing.add(runId);
+    try {
+      await active?.done;
+      this.store.finish(owner, runId);
+    } finally { this.closing.delete(runId); }
+  }
   async plan(token: string, raw: unknown, signal?: AbortSignal) {
     const owner = this.store.owner(token);
     const request = parseRequest(raw);
-    if (this.busy.has(request.runId) || this.busyOwners.has(owner)) throw new TrialError('trial_invalid', 409);
+    if (this.closing.has(request.runId) || this.busy.has(request.runId) || this.busyOwners.has(owner)) throw new TrialError('trial_invalid', 409);
     if (this.inFlight >= 4) throw new TrialError('trial_unavailable', 429);
     if (!this.store.available(this.config)) throw new TrialError('trial_unavailable');
     if (request.kind === 'first') this.store.begin(owner, request.runId);
@@ -23,7 +33,8 @@ export class RelayService {
       const run = this.store.run(owner, request.runId);
       if (run.state !== 'active' || (request.kind === 'feedback' && run.calls >= 31)) throw new TrialError('trial_invalid', 409);
     }
-    this.busy.add(request.runId);
+    let release!: () => void;
+    this.busy.set(request.runId, { owner, done: new Promise<void>((resolve) => { release = resolve; }) });
     this.busyOwners.add(owner);
     this.inFlight++;
     const transport: PlannerTransport = {
@@ -85,6 +96,6 @@ export class RelayService {
     } catch (error) {
       if (request.kind === 'first') this.store.finish(owner, request.runId);
       throw error;
-    } finally { this.busy.delete(request.runId); this.busyOwners.delete(owner); this.inFlight--; }
+    } finally { this.busy.delete(request.runId); this.busyOwners.delete(owner); this.inFlight--; release(); }
   }
 }

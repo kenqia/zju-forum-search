@@ -51,7 +51,8 @@ export function createRelayServer(service: RelayService) {
       if (path === '/v1/trial/finish' && request.method === 'POST') {
         const input = await jsonBody(request) as { runId?: unknown };
         if (!input || typeof input.runId !== 'string' || input.runId.length !== 36) throw new TrialError('trial_invalid', 400);
-        service.store.finish(owner, input.runId);
+        response.flushHeaders();
+        await service.finish(owner, input.runId);
         response.end('{"ok":true}'); return;
       }
       if (path !== '/v1/trial/plan' || request.method !== 'POST') {
