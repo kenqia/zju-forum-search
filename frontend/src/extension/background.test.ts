@@ -30,6 +30,34 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
 }
 
 describe('background message boundary', () => {
+  it('keeps the worker alive between model stages and stops after finishing the run', async () => {
+    vi.useFakeTimers();
+    try {
+      const keepAlive = vi.fn();
+      const { send } = harness({ keepAlive });
+      const runId = crypto.randomUUID();
+      await send({ type: 'planner:begin', runId });
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(keepAlive).toHaveBeenCalledTimes(3);
+      await send({ type: 'planner:finish', runId });
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(keepAlive).toHaveBeenCalledTimes(3);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('still finishes a sponsored run after the worker lost its in-memory snapshot', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{"ok":true}'));
+    const trialStorage = { get: async () => 'a'.repeat(64), set: async () => undefined };
+    const { dependencies } = harness({ trialStorage, fetch });
+    const runId = crypto.randomUUID();
+    const handler = createMessageHandler(dependencies);
+    const response = await new Promise((resolve) => handler({ type: 'planner:finish', runId }, resolve, 'cc98'));
+    expect(response).toEqual({ ok: true });
+    expect(fetch).toHaveBeenCalledWith('https://api.kenqia.top/v1/trial/finish', expect.objectContaining({
+      body: JSON.stringify({ runId }),
+    }));
+  });
+
   it('keeps a sponsored run on the relay when a key is saved mid-run', async () => {
     let saved = { ...DEFAULT_SETTINGS };
     const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ ok: true, plan: {}, feedback: {} })));

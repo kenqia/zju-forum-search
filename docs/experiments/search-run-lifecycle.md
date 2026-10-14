@@ -31,12 +31,16 @@
 
 - `cd frontend && npm run typecheck`。
 - 各增量的后台、生命周期、页面和 relay 定向测试。
-- `cd frontend && npm test`：23 个文件、283 条测试通过。
+- `cd frontend && npm test`：23 个文件、285 条测试通过。
 - `cd frontend && npm run build`：含三个来源页面挂载的构建 smoke check。
 - `cd frontend && npm run relay:build`：relay 类型检查与构建通过。
 - `git diff --check`。
 
-项目没有独立 lint 命令。审阅结果与最终产物在完成后补充。
+项目没有独立 lint 命令。
+
+Standards 初审未发现问题。Spec 初审发现 MV3 后台在来源初始化或论坛检索期间可能空闲退出，丢失设置快照；缺失快照时收尾还会跳过 relay。两项回归测试先失败，再通过。修复复用已有 Chrome storage API，每 20 秒为整个运行保活；收尾或两小时过期后释放保活计时器。缺失快照的 CC98 收尾仍调用 relay。意外崩溃后的模型阶段明确返回运行失效，不从新设置恢复。最终复审分别完成：Standards 无新增发现；Spec 确认原 P1 已解决，无新增发现。复审包含未提交的保活修复。
+
+本地产物：`/tmp/zju-forum-search-v0.3.4.zip`、`/tmp/zju-forum-search-relay-v0.3.4.zip` 和 `/tmp/zju-forum-search-v0.3.4-release-notes.md`。ZIP 完整性检查通过，扩展 manifest 为 `0.3.4`。
 
 ## 发布与回滚
 

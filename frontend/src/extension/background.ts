@@ -195,6 +195,16 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
   const plannerControllers = new Map<string, AbortController>();
   type ModelRun = { settings: Promise<ExtensionSettings>; expires: number; pending: Set<Promise<void>>; closing: boolean };
   const runSettings = new Map<string, ModelRun>();
+  let runKeepAlive: ReturnType<typeof setInterval> | undefined;
+  const maintainRuns = () => {
+    for (const [key, run] of runSettings) {
+      if (run.expires < Date.now() && !run.pending.size) runSettings.delete(key);
+    }
+    if (!runSettings.size && runKeepAlive !== undefined) {
+      clearInterval(runKeepAlive);
+      runKeepAlive = undefined;
+    }
+  };
   const newRun = (): ModelRun => ({ settings: dependencies.storage.get().then(normalizeSettings),
     expires: Date.now() + 2 * 60 * 60 * 1000, pending: new Set(), closing: false });
   return (message: unknown, sendResponse: SendResponse, sourceId?: string, documentId = ''): boolean => {
@@ -202,7 +212,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
     const request = message;
     const type = request.type;
     const scopedKey = (id: string) => JSON.stringify([sourceId, documentId, id]);
-    for (const [key, run] of runSettings) if (run.expires < Date.now() && !run.pending.size) runSettings.delete(key);
+    maintainRuns();
 
     if (type === 'planner:cancel') {
       plannerControllers.get(scopedKey(request.requestId))?.abort();
@@ -212,6 +222,12 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
 
     const runKey = 'runId' in request && request.runId ? scopedKey(request.runId) : undefined;
     if (runKey && type === 'planner:begin' && !runSettings.has(runKey)) runSettings.set(runKey, newRun());
+    if (runSettings.size && runKeepAlive === undefined && dependencies.keepAlive) {
+      runKeepAlive = setInterval(() => {
+        maintainRuns();
+        if (runSettings.size) dependencies.keepAlive!();
+      }, 20_000);
+    }
     const run = runKey ? runSettings.get(runKey) : undefined;
     const isModelCall = type === 'planner:first' || type === 'planner:feedback' || type === 'planner:rerank';
     if (run?.closing && (isModelCall || type === 'planner:begin')) {
@@ -223,7 +239,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
     if (pendingCall) run!.pending.add(pendingCall);
     if (type === 'planner:finish' && run) run.closing = true;
     const plannerController = isModelCall ? new AbortController() : null;
-    const keepAlive = (isModelCall || type === 'planner:finish') && dependencies.keepAlive
+    const keepAlive = !run && (isModelCall || type === 'planner:finish') && dependencies.keepAlive
       ? setInterval(() => dependencies.keepAlive!(), 20_000) : undefined;
     if (plannerController && 'requestId' in request) plannerControllers.set(scopedKey(request.requestId), plannerController);
 
@@ -240,6 +256,8 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
             const saved = await run.settings;
             if (!saved.llmApiKey && trial && sourceId === 'cc98') await trial.finish(request.runId);
             runSettings.delete(runKey!);
+          } else if (trial && sourceId === 'cc98') {
+            await trial.finish(request.runId);
           }
           sendResponse({ ok: true });
           return;
@@ -291,6 +309,7 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         sendResponse(errorResponse(error));
       } finally {
         if (pendingCall) { run!.pending.delete(pendingCall); releaseCall!(); }
+        maintainRuns();
         if (keepAlive !== undefined) clearInterval(keepAlive);
         if ('requestId' in request) plannerControllers.delete(scopedKey(request.requestId));
       }
