@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "浙大社区自然语言搜索",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "在 CC98 用自然语言检索帖子；朵朵校友圈仍在适配。",
   "action": {
     "default_title": "打开社区自然语言搜索"
@@ -11,6 +11,7 @@
   ],
   "host_permissions": [
     "https://api.cc98.org/*",
+    "https://api.kenqia.top/*",
     "https://api.duoduo.link/*",
     "https://webvpn.zju.edu.cn/*"
   ],

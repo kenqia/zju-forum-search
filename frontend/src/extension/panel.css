@@ -182,3 +182,6 @@ h1 { margin: 0; font-size: 15px; line-height: 1.2; font-weight: 650; letter-spac
   .drawer, .orb, .terms-trigger > svg, .disclosure-trigger > svg, .switch-control::after { transition: none; }
   .spin { animation: none; }
 }
+.trial-card { margin-bottom: 14px; padding: 14px; border: 1px solid #d8e3d9; border-radius: 12px; background: #f5f9f5; color: #233b2b; }
+.trial-card p { margin: 6px 0; font-size: 13px; line-height: 1.5; }
+.trial-card button { margin-top: 6px; }

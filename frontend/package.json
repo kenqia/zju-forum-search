@@ -5,6 +5,7 @@
     "typecheck": "tsc -b",
     "build": "tsc -b && vite build && vite build --config vite.background.config.ts && vite build --config vite.bridge.config.ts && npm run verify:dist",
     "verify:dist": "node scripts/verify-extension-build.mjs",
+    "relay:build": "tsc -p ../relay/tsconfig.json && vite build --config vite.relay.config.ts",
     "test": "vitest run"
   },
   "dependencies": {

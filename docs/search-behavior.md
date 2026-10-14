@@ -12,7 +12,7 @@
 
 ## 模型主机权限与本地密钥
 
-保存时，浏览器只申请 base URL 所在主机的访问权限。API key 保存在 `chrome.storage.local`，该存储并不加密。service worker 用 key 请求 `{base URL}/chat/completions`，但不会把它回传给 content script。key 不会写入站点页面的 light DOM、日志或仓库。
+保存自带 Key 时，浏览器只申请 base URL 所在主机的访问权限。未填写 Key 时无需申请个人模型主机权限。API key 保存在 `chrome.storage.local`，该存储并不加密。service worker 用 key 请求 `{base URL}/chat/completions`，但不会把它回传给 content script。key 不会写入站点页面的 light DOM、日志或仓库。
 
 ## 搜索边界
 
@@ -81,3 +81,7 @@ planner 的首轮和反馈提示词由 `SourceCapabilities` 生成。CC98 使用
 朵朵显示标题由正文截断生成，只供本地展示；模型反馈标题为空。扩展默认省略 `group_id`，不读取用户资料、不硬编码学校编号，也不继承原站的圈层筛选。搜索范围、`ddtk` 与 `duo_session` 的关系、未登录空结果含义、`needCode` 条件及阈值均需本人会话确认。协议与实现取舍见 [API 调研](research/duo-alumni-api-survey.md) 和 [实施记录](experiments/issue-18-19-duo-adapter.md)。
 
 本轮交付复核见 [#12–19 结案记录](experiments/issues-12-19-closeout.md)。平台内部认证标识关系、空结果原因及风控阈值等未知项由开发侧保留，用户无需为日常使用验收查看凭据或主动触发风控。
+
+## 赞助试用接入状态
+
+赞助试用已启用。未配置 Key 的 CC98 用户通过 `https://api.kenqia.top` 调用首轮规划、反馈和重排；已配置 Key 时继续直连自己的供应商。每次安装赠送五次完整搜索，首轮成功后消耗一次；首轮之前的服务故障不扣次数。赞助试用的站点请求上限为 30，最终重排最多 30 个候选。具体费用限制、隐私约定和上线验收见[赞助试用部署](sponsored-trial-deployment.md)。

@@ -7,7 +7,7 @@ import panelCss from './panel.css?inline';
 import { sourceRegistry } from './source-registry';
 import type { FeedbackInput } from './planner';
 import { SearchSession, SearchSessionError, type SearchPlanner, type SearchSnapshot } from './search-session';
-import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type FinalRerankPlan, type FinalRerankRequestInput, type ModelQueryPlan, type PublicExtensionSettings } from './types';
+import { SourceError, DEFAULT_SETTINGS, type SourceCapabilities, type ExtensionFailureCode, type ExtensionRequest, type ExtensionResponseFor, type ExtensionSettings, type FeedbackPlan, type FinalRerankPlan, type FinalRerankRequestInput, type ModelQueryPlan, type PublicExtensionSettings, type TrialStatus } from './types';
 
 export interface RuntimeMessenger {
   send<Request extends ExtensionRequest>(message: Request): Promise<ExtensionResponseFor<Request>>;
@@ -49,6 +49,7 @@ function responseError(response: { ok: false; error: string; code?: ExtensionFai
 }
 
 class BackgroundPlanner implements SearchPlanner {
+  private readonly runId = globalThis.crypto.randomUUID();
   constructor(
     private readonly runtime: RuntimeMessenger,
     private readonly capabilities: SourceCapabilities,
@@ -71,7 +72,7 @@ class BackgroundPlanner implements SearchPlanner {
   private async requestPlan(query: string, signal?: AbortSignal): Promise<ModelQueryPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const request = { type: 'planner:first' as const, requestId, query, capabilities: this.capabilities };
+    const request = { type: 'planner:first' as const, requestId, runId: this.runId, query, capabilities: this.capabilities };
     const response = await this.withCancellation(this.runtime.send(request), requestId, signal);
     if (!response.ok) throw responseError(response, '模型调用超过 60 秒，未开始检索。');
     return response.plan;
@@ -80,7 +81,7 @@ class BackgroundPlanner implements SearchPlanner {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
     const response = await this.withCancellation(this.runtime.send({
-      type: 'planner:feedback', requestId, input, capabilities: this.capabilities,
+      type: 'planner:feedback', requestId, runId: this.runId, input, capabilities: this.capabilities,
       modelSearchNarrowingEnabled: this.modelSearchNarrowingEnabled,
     }), requestId, signal);
     if (!response.ok) throw responseError(response, '反馈模型调用超过 60 秒，已保留当前结果。');
@@ -89,7 +90,7 @@ class BackgroundPlanner implements SearchPlanner {
   private async requestFinalRerank(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (signal?.aborted) return Promise.reject(new DOMException('模型请求已取消', 'AbortError'));
-    const response = await this.withCancellation(this.runtime.send({ type: 'planner:rerank', requestId, input, capabilities: this.capabilities }), requestId, signal);
+    const response = await this.withCancellation(this.runtime.send({ type: 'planner:rerank', requestId, runId: this.runId, input, capabilities: this.capabilities }), requestId, signal);
     if (!response.ok) throw responseError(response, '最终列表重排超过 60 秒，已保留本地预排序。');
     return response.rerank;
   }
@@ -101,6 +102,9 @@ class BackgroundPlanner implements SearchPlanner {
   }
   rerankResults(input: FinalRerankRequestInput, signal?: AbortSignal): Promise<FinalRerankPlan> {
     return this.requestFinalRerank(input, signal);
+  }
+  async finish() {
+    await this.runtime.send({ type: 'trial:finish', runId: this.runId }).catch(() => undefined);
   }
 }
 
@@ -133,7 +137,7 @@ function SettingsPanel({ runtime, settings, onSettings }: {
       const response = await runtime.send({ type: 'settings:save', settings: draft });
       if (!response.ok) throw responseError(response);
       onSettings(response.settings);
-      setStatus('设置已保存，并已授予该模型主机的访问权限。');
+      setStatus(response.settings.hasApiKey ? '设置已保存，并已授予该模型主机的访问权限。' : '设置已保存，搜索将使用免费体验。');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '保存设置失败');
     } finally {
@@ -153,7 +157,7 @@ function SettingsPanel({ runtime, settings, onSettings }: {
         <input type="url" value={draft.llmBaseUrl} onChange={(event) => setDraft({ ...draft, llmBaseUrl: event.target.value })} placeholder="https://example.com/v1" required />
       </label>
       <label className="field">API key
-        <input className="api-key-input" type={apiKeyInputType} value={draft.llmApiKey} onChange={(event) => setDraft({ ...draft, llmApiKey: event.target.value })} autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder={settings.hasApiKey ? '已保存；留空表示不修改' : '尚未设置'} required={!settings.hasApiKey} />
+        <input className="api-key-input" type={apiKeyInputType} value={draft.llmApiKey} onChange={(event) => setDraft({ ...draft, llmApiKey: event.target.value })} autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder={settings.hasApiKey ? '已保存；留空表示不修改' : '可留空，使用免费体验'} />
       </label>
       <label className="field">模型名称
         <input value={draft.llmModel} onChange={(event) => setDraft({ ...draft, llmModel: event.target.value })} placeholder="model-name" required />
@@ -243,7 +247,7 @@ function PrivacyDisclosure() {
     <Collapsible.Panel className="disclosure-panel" keepMounted>
       <p>反馈轮只会向模型发送原生标题、时间、板块和回复数。作者只在本地结果卡片显示，不会发送给模型。</p>
       <p>正文派生标题仅在本地显示。正文、回帖和站点登录信息不会发送给模型。</p>
-      <p>API key 只保存在 chrome.storage，不会写入页面、日志或仓库。</p>
+      <p>自己的 API key 只保存在 chrome.storage，不会写入页面、日志或仓库。免费体验通过项目服务转发同样的数据到赞助模型；项目服务只保存匿名额度和汇总用量，不保存查询和候选内容。</p>
     </Collapsible.Panel>
   </Collapsible.Root>;
 }
@@ -291,12 +295,16 @@ export function SearchStatus({ snapshot, running, onStop }: {
   </>;
 }
 
-function SearchPanel({ runtime, settings, state, onState, controller }: {
+function SearchPanel({ runtime, settings, state, onState, controller, trial, trialLoading, onRefreshTrial, onConfigure }: {
   runtime: RuntimeMessenger;
-  settings: ExtensionSettings;
+  settings: PublicExtensionSettings;
   state: SearchState;
   onState(patch: Partial<SearchState>): void;
   controller: SearchController;
+  trial: TrialStatus | null;
+  trialLoading: boolean;
+  onRefreshTrial(): void;
+  onConfigure(): void;
 }) {
   const { query, snapshot } = state;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -316,16 +324,22 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
       if (!adapter) throw new Error('当前页面没有可用的搜索源。');
       const source = await adapter.createSession({ url: location.href });
       if (controller.runId !== currentRun) return;
+      const planner = new BackgroundPlanner(runtime, source.capabilities, settings.modelSearchNarrowingEnabled);
+      const sponsored = !settings.hasApiKey;
       const nextSession = new SearchSession({
-        planner: createBackgroundPlanner(runtime, source.capabilities, settings.modelSearchNarrowingEnabled),
+        planner,
         source,
         finalRerankEnabled: settings.finalRerankEnabled,
-        finalRerankTopM: settings.finalRerankTopM,
+        finalRerankTopM: sponsored ? Math.min(30, settings.finalRerankTopM) : settings.finalRerankTopM,
         modelSearchNarrowingEnabled: settings.modelSearchNarrowingEnabled,
         onUpdate: (next) => { if (controller.runId === currentRun) setSnapshot(next); },
       });
       controller.session = nextSession;
-      await nextSession.run(normalized, settings.searchRequestLimit, settings.feedbackEvidenceLimit);
+      try {
+        await nextSession.run(normalized, sponsored ? Math.min(30, settings.searchRequestLimit) : settings.searchRequestLimit, settings.feedbackEvidenceLimit);
+      } finally {
+        if (sponsored) { await planner.finish(); onRefreshTrial(); }
+      }
       if (controller.session === nextSession) controller.session = null;
     } catch (error) {
       if (controller.runId !== currentRun) return;
@@ -346,10 +360,18 @@ function SearchPanel({ runtime, settings, state, onState, controller }: {
   }
 
   return <>
+    {!settings.hasApiKey && <div className="trial-card" role="status">
+      <strong>{trial?.remaining === 0 ? '免费体验额度已用完' : '🎁 AI 搜索体验'}</strong>
+      {trial?.remaining !== 0 && <p>{trialLoading ? '正在查询免费体验额度…' : trial && trial.available
+        ? `新用户可免费体验 5 次完整 AI 搜索，剩余 ${trial.remaining} 次` : '免费体验暂不可用'}</p>}
+      {trial?.remaining !== 0 && <p>无需配置 API Key</p>}
+      {(trial?.remaining === 0 || (!trialLoading && !trial?.available)) && <button className="secondary" type="button" onClick={onConfigure}>配置自己的 API Key</button>}
+      {!trialLoading && trial?.remaining !== 0 && !trial?.available && <button className="secondary" type="button" onClick={onRefreshTrial}>重试</button>}
+    </div>}
     <form className="search-form" onSubmit={search}>
       <Search size={16} aria-hidden="true" />
       <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="找课程、老师、资料或校园讨论…" aria-label="自然语言查询" required />
-      <button className="primary">{running ? '新搜索' : '搜索'}</button>
+      <button className="primary" disabled={!settings.hasApiKey && (running || trialLoading || !trial?.available || trial.remaining === 0)}>{running ? '新搜索' : '搜索'}</button>
     </form>
     {(snapshot.round > 0 || snapshot.query) && <SearchStatus snapshot={snapshot} running={running} onStop={stop} />}
     {(snapshot.plan || snapshot.round > 0) && <Terms snapshot={snapshot} />}
@@ -400,6 +422,14 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'search' | 'settings'>('search');
   const [settings, setSettings] = useState<PublicExtensionSettings>(DEFAULT_SETTINGS);
+  const [trial, setTrial] = useState<TrialStatus | null>(null);
+  const [trialLoading, setTrialLoading] = useState(false);
+  function refreshTrial() {
+    setTrialLoading(true);
+    void runtime.send({ type: 'trial:get' }).then((response) => {
+      setTrial(response.ok ? response.trial : null);
+    }).catch(() => setTrial(null)).finally(() => setTrialLoading(false));
+  }
   const [searchState, setSearchState] = useState<SearchState>({ query: '', snapshot: EMPTY_SNAPSHOT });
   const searchController = useRef<SearchController>({ session: null, runId: 0 });
   useEffect(() => {
@@ -408,6 +438,7 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
     }).catch(() => undefined);
   }, [runtime]);
   useEffect(() => runtime.onOpenRequested?.(() => setOpen(true)), [runtime]);
+  useEffect(() => { if (open && !settings.hasApiKey) refreshTrial(); }, [open, settings.hasApiKey]);
 
   return <>
     <style>{panelCss}</style>
@@ -419,7 +450,7 @@ function App({ runtime }: { runtime: RuntimeMessenger }) {
       <Tabs.Root value={tab} onValueChange={(value) => setTab(value as 'search' | 'settings')} className="app-tabs">
         <Tabs.List className="tabs" aria-label="功能切换"><Tabs.Tab value="search" data-tab="search" className="tab">搜索</Tabs.Tab><Tabs.Tab value="settings" data-tab="settings" className="tab"><Settings2 size={14} aria-hidden="true" />设置</Tabs.Tab></Tabs.List>
         <main className="drawer-main">
-          <Tabs.Panel value="search" keepMounted className="tab-panel"><SearchPanel runtime={runtime} settings={settings} state={searchState} onState={(patch) => setSearchState((current) => ({ ...current, ...patch }))} controller={searchController.current} /></Tabs.Panel>
+          <Tabs.Panel value="search" keepMounted className="tab-panel"><SearchPanel runtime={runtime} settings={settings} state={searchState} onState={(patch) => setSearchState((current) => ({ ...current, ...patch }))} controller={searchController.current} trial={trial} trialLoading={trialLoading} onRefreshTrial={refreshTrial} onConfigure={() => setTab('settings')} /></Tabs.Panel>
           <Tabs.Panel value="settings" keepMounted className="tab-panel"><SettingsPanel runtime={runtime} settings={settings} onSettings={setSettings} /></Tabs.Panel>
         </main>
       </Tabs.Root>

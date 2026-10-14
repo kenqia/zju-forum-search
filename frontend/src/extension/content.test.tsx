@@ -11,6 +11,32 @@ import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } fr
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('extension content UI', () => {
+  it.each([
+    [{ remaining: 5, available: true }, '剩余 5 次', false],
+    [{ remaining: 0, available: true }, '免费体验额度已用完', true],
+    [{ remaining: 3, available: false }, '免费体验暂不可用', true],
+  ])('shows sponsor state and offers settings when needed: %j', async (trial, text, disabled) => {
+    const requests: ExtensionRequest[] = [];
+    const page = document.implementation.createHTMLDocument('sponsor test');
+    const runtime: RuntimeMessenger = { send: async <Request extends ExtensionRequest>(message: Request) => {
+      requests.push(message);
+      return (message.type === 'settings:get' ? { ok: true, settings: { ...DEFAULT_SETTINGS, hasApiKey: false } }
+        : { ok: true, trial }) as ExtensionResponseFor<Request>;
+    } };
+    let mounted!: ReturnType<typeof mountExtension>;
+    await act(async () => { mounted = mountExtension(page, runtime, 'open'); });
+    expect(requests.map((request) => request.type)).toEqual(['settings:get']);
+    await act(async () => { (mounted.shadowRoot.querySelector('.orb') as HTMLButtonElement).click(); });
+    expect(mounted.shadowRoot.querySelector('.trial-card')?.textContent).toContain(text);
+    expect((mounted.shadowRoot.querySelector('.search-form button') as HTMLButtonElement).disabled).toBe(disabled);
+    if (disabled) {
+      const configure = [...mounted.shadowRoot.querySelectorAll('.trial-card button')].find((button) => button.textContent === '配置自己的 API Key') as HTMLButtonElement;
+      await act(async () => configure.click());
+      expect(mounted.shadowRoot.querySelector('[data-tab="settings"]')?.getAttribute('aria-selected')).toBe('true');
+    }
+    mounted.host.remove();
+  });
+
   it('forwards source capabilities for first-round and feedback requests', async () => {
     const capabilities = { searchSurface: 'fulltext', querySyntax: 'plain-keyword', resultOrdering: 'other' } as const;
     const requests: ExtensionRequest[] = [];

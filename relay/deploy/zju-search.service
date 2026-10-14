@@ -1,0 +1,24 @@
+[Unit]
+Description=ZJU search sponsored trial relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zju-search
+Group=zju-search
+WorkingDirectory=/opt/zju-search/relay
+EnvironmentFile=/etc/zju-search/relay.env
+ExecStart=/opt/zju-search/node-v24.16.0-linux-x64/bin/node /opt/zju-search/relay/dist/index.js
+Restart=on-failure
+RestartSec=5
+StateDirectory=zju-search
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zju-search
+
+[Install]
+WantedBy=multi-user.target

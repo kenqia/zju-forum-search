@@ -8,4 +8,7 @@ __pycache__/
 node_modules/
 dist/
 *.tsbuildinfo
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .venv/

@@ -30,6 +30,37 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
 }
 
 describe('background message boundary', () => {
+  it('uses the sponsor only without a saved key and keeps its credential out of the response', async () => {
+    const credential = 'a'.repeat(64);
+    const trialStorage = { get: vi.fn(async () => credential), set: vi.fn() };
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ ok: true, plan: { summary: '试用' } })));
+    const { dependencies } = harness({ storage: { get: async () => DEFAULT_SETTINGS, set: vi.fn() }, trialStorage, fetch });
+    const handler = createMessageHandler(dependencies);
+    const request = { type: 'planner:first', requestId: 'synthetic', runId: crypto.randomUUID(), query: '找高数资料',
+      capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } };
+    const response = await new Promise((resolve) => handler(request, resolve, 'cc98'));
+    expect(response).toEqual({ ok: true, plan: { summary: '试用' } });
+    expect(JSON.stringify(response)).not.toContain(credential);
+    expect(fetch.mock.calls[0][0]).toBe('https://api.kenqia.top/v1/trial/plan');
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ kind: 'first', runId: request.runId, query: request.query });
+    fetch.mockClear();
+    const denied = await new Promise((resolve) => handler(request, resolve, 'duo'));
+    expect(denied).toMatchObject({ ok: false, code: 'trial_unavailable' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps saved keys on the direct path and allows trial settings without requesting model permission', async () => {
+    const trialStorage = { get: vi.fn(async () => 'a'.repeat(64)), set: vi.fn() };
+    const own = harness({ trialStorage });
+    await own.send({ type: 'planner:first', requestId: 'own', runId: crypto.randomUUID(), query: '找高数资料',
+      capabilities: { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } });
+    expect(trialStorage.get).not.toHaveBeenCalled();
+    expect(own.dependencies.fetch).toHaveBeenCalledWith('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', expect.anything());
+    const trial = harness({ storage: { get: async () => DEFAULT_SETTINGS, set: vi.fn() } });
+    await expect(trial.send({ type: 'settings:save', settings: { ...DEFAULT_SETTINGS, searchRequestLimit: 20 } })).resolves.toMatchObject({ ok: true, settings: { hasApiKey: false, searchRequestLimit: 20 } });
+    expect(trial.dependencies.requestPermission).not.toHaveBeenCalled();
+  });
+
   it('routes the extension icon click to the current tab', () => {
     let onClicked: ((tab: { id?: number }) => void) | undefined;
     const sendMessage = vi.fn((_tabId: number, _message: unknown, callback: () => void) => callback());

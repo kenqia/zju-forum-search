@@ -1,6 +1,7 @@
 import { sourceRegistry } from './source-registry';
 import { PlannerClient, PlannerError, type FeedbackInput, type PlannerTransport } from './planner';
 import { chatCompletionsUrl, modelHostPermission, normalizeSettings, validateSettings } from './settings';
+import { TrialClient, TrialClientError, type TrialCredentialStorage } from './trial';
 import {
   MODEL_MAX_COMPLETION_TOKENS,
   MODEL_TIMEOUT_MS,
@@ -19,6 +20,8 @@ export interface BackgroundDependencies {
   storage: SettingsStorage;
   requestPermission(origin: string): Promise<boolean>;
   fetch(input: string, init?: RequestInit): Promise<Response>;
+  trialStorage?: TrialCredentialStorage;
+  keepAlive?(): void;
 }
 
 type SendResponse = (response: unknown) => void;
@@ -98,6 +101,8 @@ function isExtensionRequest(message: unknown): message is ExtensionRequest {
   if (!message || typeof message !== 'object') return false;
   const value = message as Record<string, unknown>;
   if (value.type === 'settings:get') return true;
+  if (value.type === 'trial:get') return true;
+  if (value.type === 'trial:finish') return typeof value.runId === 'string';
   if (value.type === 'settings:save') return Boolean(value.settings) && typeof value.settings === 'object';
   if (value.type === 'planner:cancel') return typeof value.requestId === 'string' && Boolean(value.requestId);
   if (value.type === 'planner:first') {
@@ -122,7 +127,7 @@ function errorResponse(error: unknown) {
   return {
     ok: false as const,
     error: errorMessage(error),
-    ...(error instanceof PlannerError ? { code: error.code } : {}),
+    ...(error instanceof PlannerError || error instanceof TrialClientError ? { code: error.code } : {}),
   };
 }
 
@@ -184,8 +189,9 @@ function createTransport(dependencies: BackgroundDependencies): PlannerTransport
 
 export function createMessageHandler(dependencies: BackgroundDependencies) {
   const transport = createTransport(dependencies);
+  const trial = dependencies.trialStorage ? new TrialClient(dependencies.trialStorage, dependencies.fetch) : undefined;
   const plannerControllers = new Map<string, AbortController>();
-  return (message: unknown, sendResponse: SendResponse): boolean => {
+  return (message: unknown, sendResponse: SendResponse, sourceId?: string): boolean => {
     if (!isExtensionRequest(message)) return false;
     const request = message;
     const type = request.type;
@@ -197,10 +203,17 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
     }
 
     const plannerController = type.startsWith('planner:') ? new AbortController() : null;
+    const keepAlive = plannerController && dependencies.keepAlive ? setInterval(() => dependencies.keepAlive!(), 20_000) : undefined;
     if (plannerController && 'requestId' in request) plannerControllers.set(request.requestId, plannerController);
 
     void (async () => {
       try {
+        if (type === 'trial:get' || type === 'trial:finish') {
+          if (!trial || sourceId !== 'cc98') throw new TrialClientError('免费体验暂不可用，当前只开放 CC98', 'trial_unavailable');
+          if (type === 'trial:get') sendResponse({ ok: true, trial: await trial.status() });
+          else { await trial.finish(request.runId); sendResponse({ ok: true }); }
+          return;
+        }
         if (type === 'settings:get') {
           const settings = normalizeSettings(await dependencies.storage.get());
           sendResponse({ ok: true, settings: publicSettings(settings) });
@@ -209,16 +222,21 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         if (type === 'settings:save') {
           const requested = normalizeSettings(request.settings);
           if (!requested.llmModel) throw new Error('请先填写模型名称');
-          const permission = modelHostPermission(requested.llmBaseUrl);
-          if (!await dependencies.requestPermission(permission)) throw new Error('未授予模型主机访问权限，设置没有保存');
           const stored = normalizeSettings(await dependencies.storage.get());
-          const settings = validateSettings({ ...requested, llmApiKey: requested.llmApiKey || stored.llmApiKey });
+          const settings = normalizeSettings({ ...requested, llmApiKey: requested.llmApiKey || stored.llmApiKey });
+          if (settings.llmApiKey && !await dependencies.requestPermission(modelHostPermission(settings.llmBaseUrl))) throw new Error('未授予模型主机访问权限，设置没有保存');
           await dependencies.storage.set(settings);
           sendResponse({ ok: true, settings: publicSettings(settings) });
           return;
         }
 
-        const settings = validateSettings(await dependencies.storage.get());
+        const saved = normalizeSettings(await dependencies.storage.get());
+        if (!saved.llmApiKey) {
+          if (!trial || sourceId !== 'cc98') throw new TrialClientError('免费体验暂不可用，当前只开放 CC98，请配置自己的 API Key', 'trial_unavailable');
+          sendResponse(await trial.plan(request, plannerController!.signal));
+          return;
+        }
+        const settings = validateSettings(saved);
         const plannerSettings = type === 'planner:feedback' && request.modelSearchNarrowingEnabled !== undefined
           ? { ...settings, modelSearchNarrowingEnabled: request.modelSearchNarrowingEnabled }
           : settings;
@@ -234,6 +252,9 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
       } catch (error) {
         if ('requestId' in request) plannerControllers.delete(request.requestId);
         sendResponse(errorResponse(error));
+      } finally {
+        if (keepAlive !== undefined) clearInterval(keepAlive);
+        if ('requestId' in request) plannerControllers.delete(request.requestId);
       }
     })();
     return true;
@@ -242,6 +263,21 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
 
 function browserDependencies(chromeApi: ChromeApi): BackgroundDependencies {
   return {
+    trialStorage: {
+      get: () => new Promise((resolve, reject) => {
+        chromeApi.storage.local.get('trialCredential', (value) => {
+          if (chromeApi.runtime.lastError) reject(new Error('读取试用资格失败'));
+          else resolve(typeof value.trialCredential === 'string' ? value.trialCredential : undefined);
+        });
+      }),
+      set: (token) => new Promise((resolve, reject) => {
+        chromeApi.storage.local.set({ trialCredential: token }, () => {
+          if (chromeApi.runtime.lastError) reject(new Error('保存试用资格失败'));
+          else resolve();
+        });
+      }),
+    },
+    keepAlive: () => chromeApi.storage.local.get('__keepAlive', () => { void chromeApi.runtime.lastError; }),
     storage: {
       get: () => new Promise((resolve, reject) => {
         chromeApi.storage.local.get('settings', (value) => {
@@ -270,6 +306,6 @@ if (chromeApi) {
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const senderUrl = (sender as { url?: unknown } | undefined)?.url;
     if (typeof senderUrl !== 'string' || !sourceRegistry.resolve(senderUrl)) return false;
-    return handler(message, sendResponse);
+    return handler(message, sendResponse, sourceRegistry.resolve(senderUrl)?.id);
   });
 }

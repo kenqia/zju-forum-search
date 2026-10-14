@@ -195,6 +195,7 @@ export interface ExtensionSettings {
 }
 
 export type PublicExtensionSettings = ExtensionSettings & { hasApiKey?: boolean };
+export interface TrialStatus { remaining: number; available: boolean }
 export type StoredExtensionSettings = Partial<ExtensionSettings> & { intentFilterEnabled?: unknown };
 
 export interface FeedbackRequestInput {
@@ -234,18 +235,22 @@ export interface FinalRerankPlan {
 }
 
 export type ExtensionRequest =
+  | { type: 'trial:get' }
+  | { type: 'trial:finish'; runId: string }
   | { type: 'settings:get' }
   | { type: 'settings:save'; settings: Partial<ExtensionSettings> }
-  | { type: 'planner:first'; requestId: string; query: string; capabilities: SourceCapabilities }
-  | { type: 'planner:feedback'; requestId: string; input: FeedbackRequestInput; capabilities: SourceCapabilities; modelSearchNarrowingEnabled?: boolean }
-  | { type: 'planner:rerank'; requestId: string; input: FinalRerankRequestInput; capabilities: SourceCapabilities }
+  | { type: 'planner:first'; requestId: string; runId?: string; query: string; capabilities: SourceCapabilities }
+  | { type: 'planner:feedback'; requestId: string; runId?: string; input: FeedbackRequestInput; capabilities: SourceCapabilities; modelSearchNarrowingEnabled?: boolean }
+  | { type: 'planner:rerank'; requestId: string; runId?: string; input: FinalRerankRequestInput; capabilities: SourceCapabilities }
   | { type: 'planner:cancel'; requestId: string };
 
-export type ExtensionFailureCode = 'planner_failed' | 'model_timeout' | 'model_cancelled';
+export type ExtensionFailureCode = 'planner_failed' | 'model_timeout' | 'model_cancelled' | 'trial_exhausted' | 'trial_unavailable' | 'trial_invalid';
 type ExtensionFailure = { ok: false; error: string; code?: ExtensionFailureCode };
 
 export type ExtensionResponseFor<Request extends ExtensionRequest> = ExtensionFailure | (
-  Request extends { type: 'settings:get' | 'settings:save' }
+  Request extends { type: 'trial:get' }
+    ? { ok: true; trial: TrialStatus }
+    : Request extends { type: 'settings:get' | 'settings:save' }
     ? { ok: true; settings: PublicExtensionSettings }
     : Request extends { type: 'planner:first' }
       ? { ok: true; plan: ModelQueryPlan }
