@@ -46,4 +46,6 @@ npm run release:verify -- ../dist/releases/v0.3.4/release.json
 
 `.github/workflows/ci.yml` 在推送 `main`、PR 和手动触发时执行相同的 `release:prepare`。使用只读仓库权限，不需要生产密钥。GitHub Actions 只有在工作流推送后才会运行；本地检查通过不等于远端 CI 已通过。
 
+测试命令限制为两个并行 worker，避免在内存较小的 WSL 或 CI 环境中按 CPU 数启动过多进程；测试超时阈值保持原值。
+
 当前 CI 提供检查结果，尚未设置分支保护或 required status checks。修改 GitHub 设置需要另行确认。项目没有独立 lint 命令，本流程复用现有检查。
