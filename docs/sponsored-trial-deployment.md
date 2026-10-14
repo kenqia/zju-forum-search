@@ -14,6 +14,18 @@ Ubuntu 仓库的 Nginx 1.24.0 监听公网 80/443，服务只监听 `127.0.0.1:8
 
 上线时已验证真实模型的首轮规划、反馈和最终重排，使用合成查询和候选数据，一轮只扣一次体验额度。Certbot 续期演练通过，续期 timer 已启用。273 项自动测试、类型检查、扩展构建和服务端构建均通过。自动测试使用合成模型响应；真实 CC98 登录会话和浏览器中超过 30 秒的响应仍需人工复验。
 
+## v0.3.4 更新记录
+
+2026-10-14，经运营者确认，已部署配套 relay 并发布 [v0.3.4](https://github.com/kenqia/zju-forum-search/releases/tag/v0.3.4)。部署只替换 `dist/index.js` 和 `package.json`，随后重启 `zju-search`；未修改密钥配置、试用开关或 SQLite 账本。部署文件 SHA-256 与本地产物一致，本机及公网 HTTPS `/healthz` 均返回 `{"ok":true}`。本次未重复调用真实模型，健康检查不验证模型或浏览器中的取消流程。
+
+维护入口使用以下 SSH 命令。私钥仅用于本机认证，不上传到服务器或仓库。
+
+```bash
+ssh -i ~/.ssh/id_ed25519 root@118.25.26.140
+```
+
+旧构建保存在服务器 `/etc/zju-search/rollback/relay-before-v0.3.4-20261014/`。回滚时将其中的 `index.js` 和 `package.json` 恢复到 `/opt/zju-search/relay/dist/index.js` 和 `/opt/zju-search/relay/package.json`，重启服务并检查 `/healthz`；保留现有配置和账本。
+
 ## 本地构建
 
 服务端没有新增第三方运行依赖，使用 Node.js 24 的 HTTP、fetch 和 SQLite。构建复用前端的 TypeScript 和 Vite。

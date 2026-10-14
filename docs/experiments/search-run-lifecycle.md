@@ -46,6 +46,6 @@ Standards 初审未发现问题。Spec 初审发现 MV3 后台在来源初始化
 
 准备版本为 `v0.3.4`。先部署配套 relay，再发布扩展。ZIP 根目录包含 `dist/`，不包含源文件、凭据或 SQLite 文件。
 
-本轮只准备本地产物，不推送、不创建远端 Release、不部署。上线前仍需用户确认。回滚恢复上一版扩展和 relay 构建，保留现有设置与 SQLite 账本；无需恢复或迁移凭据。
+实现阶段只准备本地产物。2026-10-14，用户明确确认后，代码已推送，配套 relay 已先行部署并通过本机及公网 HTTPS 健康检查，随后公开发布 [v0.3.4](https://github.com/kenqia/zju-forum-search/releases/tag/v0.3.4)。Git tag 指向 `113dd75652e44e2f630f88058267ca6961f4f0d0`；远端扩展 ZIP 的 SHA-256 与本地一致。部署和回滚位置见 `docs/sponsored-trial-deployment.md`。回滚恢复上一版扩展和 relay 构建，保留现有设置与 SQLite 账本；无需恢复或迁移凭据。
 
 真实 Chrome 登录会话、WebVPN、供应商模型、线上取消与额度刷新尚未验证。
