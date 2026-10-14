@@ -30,6 +30,22 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
 }
 
 describe('background message boundary', () => {
+  it('keeps the model settings for a run while later runs use saved changes', async () => {
+    const { send, dependencies } = harness();
+    const capabilities = { searchSurface: 'title', querySyntax: 'plain-keyword', resultOrdering: 'time-desc' } as const;
+    const runId = crypto.randomUUID();
+    await send({ type: 'planner:first', requestId: 'first', runId, query: '高数', capabilities });
+    await send({ type: 'settings:save', settings: { ...DEFAULT_SETTINGS, llmApiKey: 'replacement-test-key',
+      llmBaseUrl: 'https://replacement.invalid/v1', llmModel: 'replacement' } });
+    await send({ type: 'planner:feedback', requestId: 'feedback', runId, capabilities,
+      input: { query: '高数', executedSearches: [], candidates: [] } });
+    const calls = vi.mocked(dependencies.fetch).mock.calls;
+    expect(calls[1][0]).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions');
+    expect(JSON.parse(String(calls[1][1]?.body)).model).toBe(DEFAULT_SETTINGS.llmModel);
+    await send({ type: 'planner:first', requestId: 'next', runId: crypto.randomUUID(), query: '高数', capabilities });
+    expect(calls[2][0]).toBe('https://replacement.invalid/v1/chat/completions');
+  });
+
   it('uses the sponsor only without a saved key and keeps its credential out of the response', async () => {
     const credential = 'a'.repeat(64);
     const trialStorage = { get: vi.fn(async () => credential), set: vi.fn() };

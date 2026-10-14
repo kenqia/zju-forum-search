@@ -191,20 +191,23 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
   const transport = createTransport(dependencies);
   const trial = dependencies.trialStorage ? new TrialClient(dependencies.trialStorage, dependencies.fetch) : undefined;
   const plannerControllers = new Map<string, AbortController>();
-  return (message: unknown, sendResponse: SendResponse, sourceId?: string): boolean => {
+  const runSettings = new Map<string, { settings: Promise<ExtensionSettings>; expires: number }>();
+  return (message: unknown, sendResponse: SendResponse, sourceId?: string, documentId = ''): boolean => {
     if (!isExtensionRequest(message)) return false;
     const request = message;
     const type = request.type;
+    const scopedKey = (id: string) => JSON.stringify([sourceId, documentId, id]);
+    for (const [key, run] of runSettings) if (run.expires < Date.now()) runSettings.delete(key);
 
     if (type === 'planner:cancel') {
-      plannerControllers.get(request.requestId)?.abort();
+      plannerControllers.get(scopedKey(request.requestId))?.abort();
       sendResponse({ ok: true });
       return false;
     }
 
     const plannerController = type.startsWith('planner:') ? new AbortController() : null;
     const keepAlive = plannerController && dependencies.keepAlive ? setInterval(() => dependencies.keepAlive!(), 20_000) : undefined;
-    if (plannerController && 'requestId' in request) plannerControllers.set(request.requestId, plannerController);
+    if (plannerController && 'requestId' in request) plannerControllers.set(scopedKey(request.requestId), plannerController);
 
     void (async () => {
       try {
@@ -230,7 +233,13 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
           return;
         }
 
-        const saved = normalizeSettings(await dependencies.storage.get());
+        const runKey = request.runId ? scopedKey(request.runId) : undefined;
+        if (runKey && type === 'planner:first' && !runSettings.has(runKey)) {
+          runSettings.set(runKey, { settings: dependencies.storage.get().then(normalizeSettings), expires: Date.now() + 2 * 60 * 60 * 1000 });
+        }
+        const run = runKey ? runSettings.get(runKey) : undefined;
+        if (runKey && !run) throw new PlannerError('搜索运行已失效，请重新开始搜索');
+        const saved = run ? await run.settings : normalizeSettings(await dependencies.storage.get());
         if (!saved.llmApiKey) {
           if (!trial || sourceId !== 'cc98') throw new TrialClientError('免费体验暂不可用，当前只开放 CC98，请配置自己的 API Key', 'trial_unavailable');
           sendResponse(await trial.plan(request, plannerController!.signal));
@@ -248,13 +257,13 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         } else {
           sendResponse({ ok: true, rerank: await planner.rerankResults(request.input as import('./types').FinalRerankRequestInput, plannerController!.signal) });
         }
-        plannerControllers.delete(request.requestId);
+        plannerControllers.delete(scopedKey(request.requestId));
       } catch (error) {
-        if ('requestId' in request) plannerControllers.delete(request.requestId);
+        if ('requestId' in request) plannerControllers.delete(scopedKey(request.requestId));
         sendResponse(errorResponse(error));
       } finally {
         if (keepAlive !== undefined) clearInterval(keepAlive);
-        if ('requestId' in request) plannerControllers.delete(request.requestId);
+        if ('requestId' in request) plannerControllers.delete(scopedKey(request.requestId));
       }
     })();
     return true;
@@ -306,6 +315,8 @@ if (chromeApi) {
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const senderUrl = (sender as { url?: unknown } | undefined)?.url;
     if (typeof senderUrl !== 'string' || !sourceRegistry.resolve(senderUrl)) return false;
-    return handler(message, sendResponse, sourceRegistry.resolve(senderUrl)?.id);
+    const senderIdentity = sender as { documentId?: string; tab?: { id?: number }; frameId?: number };
+    return handler(message, sendResponse, sourceRegistry.resolve(senderUrl)?.id,
+      senderIdentity.documentId ?? `${senderIdentity.tab?.id}:${senderIdentity.frameId}`);
   });
 }
