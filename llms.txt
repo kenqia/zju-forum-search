@@ -1,0 +1,39 @@
+# ZJU Forum Search
+
+> A Manifest V3 browser extension for natural-language search of ZJU campus forum posts. Primary support: CC98. Chinese name: 浙大社区自然语言搜索. It discovers original threads, rather than generating answers from a full-site index.
+
+## Project facts
+
+- Audience: Zhejiang University students with their own authorized forum access.
+- Interface: an in-page search panel opened through a floating button or extension action.
+- Search: model query planning, bounded iterative site search, browser-local candidate merging and pre-ranking, and optional final model reranking.
+- Primary source: CC98 direct access. CC98 WebVPN support is implemented, with bridge rate-limit changes awaiting verification in a real session.
+- Experimental source: 朵朵校友圈 / Duo alumni community; requires a personal model key.
+- Model access: 5 sponsored trial searches per new installation for CC98, subject to service availability and sponsor budget; no automatic quota refill. Users can configure an OpenAI-compatible base URL, key, and model.
+- Trial accounting: one complete search consumes one credit after the first successful model planning call, even if later cancelled or interrupted. Existing personal model configuration takes precedence.
+- Install: download the extension ZIP from the latest GitHub Release, extract it, and load its dist/ directory in Edge developer mode. Forum login is required.
+- Stack: React, TypeScript, Vite, Manifest V3, and a sponsored-trial relay service. Local checks require Node.js 24.16.0, npm, and Python 3.
+- Not provided: a public search API, an MCP server, a full-site forum index, guaranteed exhaustive retrieval, or official university/forum affiliation.
+- Privacy: model inputs can include the question, date, search terms, retrieval statistics, native thread titles, publication times, boards, and reply counts. Authors, post bodies, replies, thread URLs, and forum credentials are not sent to models. Body-derived Duo display titles stay local.
+- Personal model keys are stored in unencrypted chrome.storage.local and used to authenticate with the configured model provider. Sponsored trial requests pass through the project relay; it does not retain queries, candidate content, or model responses.
+- This file is a reading index, not an executable integration or a guarantee that external AI crawlers will discover or index the project.
+
+## User documentation
+
+- [Project overview](https://github.com/kenqia/zju-forum-search/blob/main/README.md): Chinese product introduction, demo, installation, compatibility, and privacy summary.
+- [Latest release](https://github.com/kenqia/zju-forum-search/releases/latest): Download the extension ZIP containing dist/.
+- [User guide](https://github.com/kenqia/zju-forum-search/blob/main/docs/user-guide.md): Detailed installation, settings, trial accounting, and privacy.
+
+## Technical documentation
+
+- [Documentation index](https://github.com/kenqia/zju-forum-search/blob/main/docs/README.md): Navigation for developers and operators.
+- [Domain vocabulary](https://github.com/kenqia/zju-forum-search/blob/main/CONTEXT.md): Canonical project terminology.
+- [Search behavior](https://github.com/kenqia/zju-forum-search/blob/main/docs/search-behavior.md): Retrieval lifecycle, sorting, permissions, and source integration boundaries.
+- [Architecture decisions](https://github.com/kenqia/zju-forum-search/tree/main/docs/adr): Design rationale and tradeoffs.
+- [Manual acceptance](https://github.com/kenqia/zju-forum-search/blob/main/docs/manual-acceptance.md): Browser validation procedures and known verification gaps.
+- [Sponsored trial deployment](https://github.com/kenqia/zju-forum-search/blob/main/docs/sponsored-trial-deployment.md): Relay operations and budget management.
+- [Release procedure](https://github.com/kenqia/zju-forum-search/blob/main/docs/agents/releases.md): Artifact preparation and verification.
+
+## Repository
+
+- [Source and issues](https://github.com/kenqia/zju-forum-search): Source code, issue tracker, and release history. Do not submit credentials or private forum data in issues.
