@@ -276,9 +276,12 @@ export function createMessageHandler(dependencies: BackgroundDependencies) {
         if (type === 'settings:save') {
           const requested = normalizeSettings(request.settings);
           if (!requested.llmModel) throw new Error('请先填写模型名称');
+          // Request while the save message still carries the click gesture, before storage callbacks.
+          const permissionGranted = requested.llmApiKey || request.settings.hasApiKey === true
+            ? await dependencies.requestPermission(modelHostPermission(requested.llmBaseUrl)) : undefined;
           const stored = normalizeSettings(await dependencies.storage.get());
           const settings = normalizeSettings({ ...requested, llmApiKey: requested.llmApiKey || stored.llmApiKey });
-          if (settings.llmApiKey && !await dependencies.requestPermission(modelHostPermission(settings.llmBaseUrl))) throw new Error('未授予模型主机访问权限，设置没有保存');
+          if (settings.llmApiKey && !(permissionGranted ?? await dependencies.requestPermission(modelHostPermission(settings.llmBaseUrl)))) throw new Error('未授予模型主机访问权限，设置没有保存');
           await dependencies.storage.set(settings);
           sendResponse({ ok: true, settings: publicSettings(settings) });
           return;
@@ -349,8 +352,11 @@ function browserDependencies(chromeApi: ChromeApi): BackgroundDependencies {
         });
       }),
     },
-    requestPermission: (origin) => new Promise((resolve) => {
-      chromeApi.permissions.request({ origins: [origin] }, resolve);
+    requestPermission: (origin) => new Promise((resolve, reject) => {
+      chromeApi.permissions.request({ origins: [origin] }, (granted) => {
+        if (chromeApi.runtime.lastError) reject(new Error('浏览器无法发起模型主机授权，请重新点击保存；若仍失败，请重新加载扩展并刷新页面'));
+        else resolve(granted);
+      });
     }),
     fetch: (input, init) => fetch(input, init),
   };

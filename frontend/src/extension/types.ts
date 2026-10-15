@@ -238,7 +238,7 @@ export type ExtensionRequest =
   | { type: 'trial:get' }
   | { type: 'trial:finish'; runId: string }
   | { type: 'settings:get' }
-  | { type: 'settings:save'; settings: Partial<ExtensionSettings> }
+  | { type: 'settings:save'; settings: Partial<PublicExtensionSettings> }
   | { type: 'planner:begin'; runId: string }
   | { type: 'planner:finish'; runId: string }
   | { type: 'planner:first'; requestId: string; runId?: string; query: string; capabilities: SourceCapabilities }

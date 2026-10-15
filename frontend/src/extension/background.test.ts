@@ -30,6 +30,33 @@ function harness(overrides: Partial<BackgroundDependencies> = {}) {
 }
 
 describe('background message boundary', () => {
+  it.each([false, true])('requests model permission before storage callbacks lose the save gesture, existing key: %s', async (hasApiKey) => {
+    let gesture = true;
+    const storage = {
+      get: vi.fn(async () => { gesture = false; return { ...DEFAULT_SETTINGS, llmApiKey: hasApiKey ? 'synthetic-stored-key' : '' }; }),
+      set: vi.fn(async () => undefined),
+    };
+    const requestPermission = vi.fn(async () => gesture);
+    const { send } = harness({ storage, requestPermission });
+    await expect(send({ type: 'settings:save', settings: {
+      ...DEFAULT_SETTINGS, hasApiKey, llmApiKey: hasApiKey ? '' : 'synthetic-personal-key',
+    } })).resolves.toMatchObject({ ok: true, settings: { hasApiKey: true, llmApiKey: '' } });
+    expect(requestPermission).toHaveBeenCalledWith('https://dashscope.aliyuncs.com/*');
+    expect(storage.set).toHaveBeenCalledOnce();
+    expect(storage.set).toHaveBeenCalledWith(expect.objectContaining({ llmApiKey: hasApiKey ? 'synthetic-stored-key' : 'synthetic-personal-key' }));
+  });
+
+  it.each([false, 'error'])('keeps saved settings intact when permission is denied or errors: %s', async (result) => {
+    const requestPermission = vi.fn(async () => {
+      if (result === 'error') throw new Error('synthetic permission error');
+      return false;
+    });
+    const { send, dependencies } = harness({ requestPermission });
+    await expect(send({ type: 'settings:save', settings: { ...DEFAULT_SETTINGS, llmApiKey: 'synthetic-key' } })).resolves.toMatchObject({ ok: false });
+    expect(requestPermission).toHaveBeenCalledOnce();
+    expect(dependencies.storage.set).not.toHaveBeenCalled();
+  });
+
   it('keeps the worker alive between model stages and stops after finishing the run', async () => {
     vi.useFakeTimers();
     try {

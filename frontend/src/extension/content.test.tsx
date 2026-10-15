@@ -6,11 +6,62 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createBackgroundPlanner, mountExtension, ResultLists, SearchStatus, Terms, type RuntimeMessenger } from './content';
 import type { SearchSnapshot } from './search-session';
+import { createMessageHandler } from './background';
 import { DEFAULT_SETTINGS, type ExtensionRequest, type ExtensionResponseFor } from './types';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('extension content UI', () => {
+  it.each([true, false])('updates the exhausted trial card only after saving a personal key successfully: %s', async (granted) => {
+    let stored = { ...DEFAULT_SETTINGS };
+    let gesture = false;
+    const handler = createMessageHandler({
+      storage: {
+        get: async () => { gesture = false; return stored; },
+        set: async (settings) => { stored = settings; },
+      },
+      requestPermission: async () => gesture && granted,
+      fetch: vi.fn(),
+    });
+    const runtime: RuntimeMessenger = {
+      send: <Request extends ExtensionRequest>(message: Request) => new Promise<ExtensionResponseFor<Request>>((resolve) => {
+        if (message.type === 'trial:get') resolve({ ok: true, trial: { remaining: 0, available: true } } as ExtensionResponseFor<Request>);
+        else handler(message, (response) => resolve(response as ExtensionResponseFor<Request>));
+      }),
+    };
+    const page = document.implementation.createHTMLDocument('personal model after trial');
+    let mounted!: ReturnType<typeof mountExtension>;
+    await act(async () => { mounted = mountExtension(page, runtime, 'open'); });
+    const root = mounted.shadowRoot;
+    await act(async () => { (root.querySelector('.orb') as HTMLButtonElement).click(); });
+    expect(root.querySelector('.trial-card')?.textContent).toContain('免费体验额度已用完');
+    await act(async () => { (root.querySelector('.trial-card button') as HTMLButtonElement).click(); });
+    const fields = root.querySelectorAll<HTMLInputElement>('.settings-section .field input');
+    for (const [input, value] of [[fields[1], 'synthetic-key'], [fields[2], 'synthetic-model']] as const) {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      });
+    }
+    await act(async () => {
+      gesture = true;
+      root.querySelector('.settings-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    if (granted) {
+      expect(stored.llmApiKey).toBe('synthetic-key');
+      expect(stored.llmModel).toBe('synthetic-model');
+      expect(root.querySelector('.trial-card')).toBeNull();
+      expect(root.querySelector('.settings-status')?.textContent).toContain('设置已保存');
+      expect((root.querySelector('.api-key-input') as HTMLInputElement).value).toBe('');
+      expect((root.querySelector('.search-form button') as HTMLButtonElement).disabled).toBe(false);
+    } else {
+      expect(stored.llmApiKey).toBe('');
+      expect(root.querySelector('.trial-card')?.textContent).toContain('免费体验额度已用完');
+      expect(root.querySelector('.settings-status')?.textContent).toContain('设置没有保存');
+    }
+    mounted.host.remove();
+  });
+
   it.each([
     [{ remaining: 5, available: true }, '剩余 5 次', false],
     [{ remaining: 0, available: true }, '免费体验额度已用完', true],
