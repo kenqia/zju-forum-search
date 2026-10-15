@@ -31,6 +31,8 @@ UI 测试连接真实 `createMessageHandler` 与 Shadow DOM 设置表单，使�
 
 已运行 `npm run typecheck`、后台与 UI 的 47 个测试，以及 `npm run build` 和构建产物检查。发布准备继续运行项目完整的 `npm run check`，结果以本次准备命令输出为准。
 
+首次完整发布检查时，WSL 可用内存约 350 MiB、Swap 已满，两个 worker 下出现启动超时与既有 UI 测试超时。将已有测试脚本的 worker 数从 2 调整为 1 后重新运行发布流程，不放宽任何测试超时阈值。
+
 未使用真实论坛登录态、真实 Key 或真实模型调用，也未完成 Windows Edge 原生权限弹窗允许后的人工验证。步骤见[手动验收](../manual-acceptance.md#个人模型保存与试用提示)。
 
 ## 回滚
